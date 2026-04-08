@@ -1,0 +1,31 @@
+# LLM & Orchestration
+langchain>=0.3.0
+langchain-openai>=0.2.0
+langgraph>=0.2.0
+
+# Vector Store
+qdrant-client>=1.12.0
+langchain-qdrant>=0.2.0
+
+# Embeddings
+openai>=1.50.0
+
+# PDF Parsing
+pdfplumber>=0.11.0
+
+# Backend
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+websockets>=13.0
+python-multipart>=0.0.12
+
+# MCP
+mcp>=1.0.0
+
+# Observability
+langsmith>=0.1.0
+
+# Utilities
+pydantic>=2.9.0
+python-dotenv>=1.0.0
+pyyaml>=6.0.0
