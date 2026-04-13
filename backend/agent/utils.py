@@ -29,14 +29,14 @@ def get_openai_client() -> OpenAI:
     return OpenAI(api_key=OPENAI_API_KEY)
 
 
-def load_prompt(name: str) -> dict:
+def load_prompt(template_name: str) -> dict:
     """
     Load a prompt YAML file by node name (e.g., "moderator_v1").
 
     Returns the full YAML dict with keys: name, version, model,
     system_prompt, user_prompt, etc.
     """
-    path = PROMPTS_DIR / f"{name}.yaml"
+    path = PROMPTS_DIR / f"{template_name}.yaml"
     if not path.exists():
         raise FileNotFoundError(f"Prompt file not found: {path}")
 
@@ -44,11 +44,7 @@ def load_prompt(name: str) -> dict:
         return yaml.safe_load(f)
 
 
-def call_llm(
-    prompt_config: dict,
-    user_vars: dict,
-    client: OpenAI | None = None,
-) -> dict:
+def call_llm(prompt_config: dict, user_vars: dict, client: OpenAI | None = None) -> dict:
     """
     Call OpenAI with a loaded prompt config and template variables.
 
