@@ -2,79 +2,51 @@
 LangGraph StateGraph definition for InvestorLens.
 
 This wires all nodes together with conditional edges:
-  Moderator → Rewriter → Router → Retriever → Grader → Generator
-                                                 ↑          ↓
-                                                 └── (retry if low relevance)
 
-Risk Flagger branches off when the router detects risk-related queries.
-The Grader → Rewriter cycle runs up to 2 retries before falling back.
+  Moderator ─(blocked)──────────────────────────────────────→ END
+      │
+      │(continue)
+      ↓
+  Rewriter → Router → Retriever ─(analyze_disclosures)─→ [INTERRUPT] Disclosure Analyzer → END
+                                  │
+                                  │(otherwise)
+                                  ↓
+                              Grader ─(retry)──→ Rewriter
+                                  │
+                                  │(generate)
+                                  ↓
+                              Generator → END
+
+The Grader → Rewriter cycle runs up to 2 retries before falling back to
+generation. The Disclosure Analyzer branch pauses before execution so a
+human can review the query and the retrieved source material (HITL via
+`interrupt_before`).
+
+The retriever runs for ALL strategies — including `analyze_disclosures` —
+so that disclosure analysis has actual document chunks to work with, and
+so the human reviewer can see what would be analysed before approving.
+
+"Disclosed risks" here means material business risks the company has disclosed
+in its own filings — NOT risky user queries or AI safety risk. The moderator
+handles query-level safety.
 """
 
 import logging
 
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from backend.agent.nodes.adaptive_router import adaptive_router
+from backend.agent.nodes.disclosure_analyzer import disclosure_analyzer
+from backend.agent.nodes.generator import generator
+from backend.agent.nodes.grader import grader
+from backend.agent.nodes.moderator import moderator
+from backend.agent.nodes.retriever import retriever
+from backend.agent.nodes.rewriter import rewriter
 from backend.agent.state import AgentState
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Stub nodes — each will be replaced with real implementations in later steps
-# ---------------------------------------------------------------------------
-
-def moderator(state: AgentState) -> dict:
-    """Check query safety and relevance. Stub: always passes."""
-    logger.info("Node: moderator (stub)")
-    return {"current_node": "moderator"}
-
-
-def rewriter(state: AgentState) -> dict:
-    """Rewrite ambiguous queries using chat history. Stub: passes query through."""
-    logger.info("Node: rewriter (stub)")
-    return {"current_node": "rewriter"}
-
-
-def router(state: AgentState) -> dict:
-    """Classify query into retrieval strategy. Stub: defaults to semantic_search."""
-    logger.info("Node: router (stub)")
-    return {
-        "current_node": "router",
-        "retrieval_strategy": "semantic_search",
-        "strategy_reasoning": "default stub routing",
-    }
-
-
-def retriever(state: AgentState) -> dict:
-    """Execute retrieval strategy. Stub: returns empty docs."""
-    logger.info("Node: retriever (stub)")
-    return {"current_node": "retriever", "retrieved_docs": []}
-
-
-def grader(state: AgentState) -> dict:
-    """Score chunk relevance. Stub: passes all docs through."""
-    logger.info("Node: grader (stub)")
-    return {
-        "current_node": "grader",
-        "relevant_docs": state.get("retrieved_docs", []),
-    }
-
-
-def generator(state: AgentState) -> dict:
-    """Generate grounded answer with confidence. Stub: placeholder response."""
-    logger.info("Node: generator (stub)")
-    return {
-        "current_node": "generator",
-        "generation": "This is a stub response.",
-        "confidence": 1.0,
-    }
-
-
-def risk_flagger(state: AgentState) -> dict:
-    """Flag risk disclosures for human review. Stub: no-op."""
-    logger.info("Node: risk_flagger (stub)")
-    return {"current_node": "risk_flagger"}
 
 
 # ---------------------------------------------------------------------------
@@ -88,12 +60,18 @@ def should_continue_after_moderator(state: AgentState) -> str:
     return "continue"
 
 
-def route_after_router(state: AgentState) -> str:
-    """Branch based on retrieval strategy. Risk queries go to risk_flagger."""
+def route_after_retrieval(state: AgentState) -> str:
+    """
+    After retrieval, branch based on the strategy chosen earlier by the router.
+
+    Disclosure queries skip the grader and go straight to disclosure_analyzer
+    (which is then HITL-gated). All other strategies go through the grader for
+    relevance scoring and the self-correcting loop.
+    """
     strategy = state.get("retrieval_strategy", "semantic_search")
-    if strategy == "flag_risks":
-        return "risk_flagger"
-    return "retriever"
+    if strategy == "analyze_disclosures":
+        return "disclosure_analyzer"
+    return "grader"
 
 
 def should_retry_after_grader(state: AgentState) -> str:
@@ -118,11 +96,11 @@ def build_graph() -> CompiledStateGraph:
     # Add nodes
     graph.add_node("moderator", moderator)
     graph.add_node("rewriter", rewriter)
-    graph.add_node("router", router)
+    graph.add_node("adaptive_router", adaptive_router)
     graph.add_node("retriever", retriever)
     graph.add_node("grader", grader)
     graph.add_node("generator", generator)
-    graph.add_node("risk_flagger", risk_flagger)
+    graph.add_node("disclosure_analyzer", disclosure_analyzer)
 
     # Set entry point
     graph.set_entry_point("moderator")
@@ -135,17 +113,17 @@ def build_graph() -> CompiledStateGraph:
     )
 
     # Rewriter → Router
-    graph.add_edge("rewriter", "router")
+    graph.add_edge("rewriter", "adaptive_router")
 
-    # Router → (risk_flagger) | (retriever)
+    # Router → Retriever (always — every strategy needs documents)
+    graph.add_edge("adaptive_router", "retriever")
+
+    # Retriever → (disclosure_analyzer) | (grader)
     graph.add_conditional_edges(
-        "router",
-        route_after_router,
-        {"risk_flagger": "risk_flagger", "retriever": "retriever"},
+        "retriever",
+        route_after_retrieval,
+        {"disclosure_analyzer": "disclosure_analyzer", "grader": "grader"},
     )
-
-    # Retriever → Grader
-    graph.add_edge("retriever", "grader")
 
     # Grader → (retry → rewriter) | (generate → generator)
     graph.add_conditional_edges(
@@ -157,10 +135,17 @@ def build_graph() -> CompiledStateGraph:
     # Generator → END
     graph.add_edge("generator", END)
 
-    # Risk Flagger → END
-    graph.add_edge("risk_flagger", END)
+    # Disclosure Analyzer → END
+    graph.add_edge("disclosure_analyzer", END)
 
-    return graph.compile()
+    # Compile with checkpointer + HITL interrupt before disclosure_analyzer.
+    # - MemorySaver persists state between invocations, enabling pause/resume.
+    # - interrupt_before=["disclosure_analyzer"] pauses BEFORE the node runs so
+    #   a human reviewer can approve or reject the query via the frontend.
+    return graph.compile(
+        checkpointer=MemorySaver(),
+        interrupt_before=["disclosure_analyzer"],
+    )
 
 
 # Compiled graph instance

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-COLLECTION_NAME = "documents"
+COLLECTION_NAME = "investorlens_docs"
 
 # How many chunks to retrieve per strategy
 TOP_K = {
@@ -52,7 +52,7 @@ def _semantic_search(query: str, top_k: int) -> list[dict]:
     results = qdrant.query_points(
         collection_name=COLLECTION_NAME,
         query=query_vector,
-        limit=top_k,
+        limit=top_k, # Controls how many of the most similar document chuncks are returned from the vector store query
     )
 
     return [
@@ -61,7 +61,7 @@ def _semantic_search(query: str, top_k: int) -> list[dict]:
             "source": (hit.payload or {}).get("source", "unknown"),
             "page": (hit.payload or {}).get("page", 0),
             "chunk_index": (hit.payload or {}).get("chunk_index", 0),
-            "score": hit.score,
+            "score": hit.score, # how similar to the query
         }
         for hit in results.points
     ]
@@ -77,6 +77,8 @@ def _keyword_search(query: str, top_k: int) -> list[dict]:
     results = _semantic_search(query, top_k=top_k * 2)
 
     # Apply a stricter score threshold for keyword queries
+    # The embedding captures the general concept of "revenue" and "2023" — but it might also match chunks about "income", "earnings", "fiscal year", or other financially-related text that doesn't actually contain those exact terms.
+    # Short, specific keyword queries produce less distinctive embeddings compared to full natural language questions like "What was the company's total revenue in 2023?", which give the model more semantic signal to work with.
     filtered = [doc for doc in results if doc["score"] >= 0.3]
     return filtered[:top_k]
 
@@ -104,12 +106,15 @@ def _compare(query: str, top_k: int) -> list[dict]:
     seen_sources = set()
     diverse_results = []
 
+    chunks_per_source: dict[str, int] = {}
+
     for doc in results:
         source = doc["source"]
         # Take up to top_k/2 chunks per source to ensure diversity
-        source_count = sum(1 for d in diverse_results if d["source"] == source)
-        if source_count < top_k // 2:
+        current_count = chunks_per_source.get(source, 0)
+        if current_count < top_k // 2:
             diverse_results.append(doc)
+            chunks_per_source[source] = current_count + 1
             seen_sources.add(source)
 
         if len(diverse_results) >= top_k:

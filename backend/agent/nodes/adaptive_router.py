@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 
 PROMPT = load_prompt("adaptive_router_v1")
 
-VALID_STRATEGIES = {"semantic_search", "keyword_search", "direct_extract", "compare"}
+VALID_STRATEGIES = {"semantic_search", "keyword_search", "direct_extract", "compare", "analyze_disclosures"}
 
 
-def router(state: AgentState) -> dict:
+def adaptive_router(state: AgentState) -> dict:
     """
     Classify the query into a retrieval strategy.
 
