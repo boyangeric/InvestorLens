@@ -1,9 +1,8 @@
 """
-Document upload endpoint — ingests a PDF into Qdrant.
+Document endpoints — ingest, list, and inspect indexed PDFs.
 
-Runs the parse → chunk → embed → store pipeline in a background-safe way.
-For a real deployment you'd queue this to a worker (Celery, RQ); here we run
-it inline because the dev UX benefits from synchronous feedback.
+Runs parse → chunk → embed → store inline (a real deployment would queue
+this to a worker; here we keep dev UX synchronous).
 """
 
 import logging
@@ -13,12 +12,75 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File
 
 from backend.ingestion.chunker import chunk_pages
-from backend.ingestion.embedder import store_chunks
+from backend.ingestion.embedder import (
+    COLLECTION_NAME,
+    get_qdrant_client,
+    store_chunks,
+)
 from backend.ingestion.parser import parse_pdf
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.get("")
+async def list_documents() -> dict:
+    """
+    Return every document currently indexed, with chunk + page counts.
+
+    Scrolls the Qdrant collection (payload only — no vectors) and aggregates
+    by `source`. Cheap for demo-scale corpora; for production you'd cache or
+    maintain a dedicated documents table.
+    """
+    client = get_qdrant_client()
+
+    # If the collection doesn't exist yet, return empty list rather than 500.
+    existing = {c.name for c in client.get_collections().collections}
+    if COLLECTION_NAME not in existing:
+        return {"documents": [], "total_chunks": 0}
+
+    by_source: dict[str, dict] = {}
+    next_offset = None
+
+    while True:
+        points, next_offset = client.scroll(
+            collection_name=COLLECTION_NAME,
+            with_payload=True,
+            with_vectors=False,
+            limit=256,
+            offset=next_offset,
+        )
+        if not points:
+            break
+
+        for p in points:
+            payload = p.payload or {}
+            source = payload.get("source", "unknown")
+            page = int(payload.get("page", 0))
+
+            doc = by_source.setdefault(
+                source, {"source": source, "chunks": 0, "pages": set()}
+            )
+            doc["chunks"] += 1
+            doc["pages"].add(page)
+
+        if next_offset is None:
+            break
+
+    documents = [
+        {
+            "source": d["source"],
+            "chunks": d["chunks"],
+            "pages": len(d["pages"]),
+        }
+        for d in sorted(by_source.values(), key=lambda x: x["source"])
+    ]
+
+    return {
+        "documents": documents,
+        "total_chunks": sum(d["chunks"] for d in documents),
+    }
 
 
 @router.post("/upload")
