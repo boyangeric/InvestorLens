@@ -24,20 +24,10 @@ system_prompt: |
   3. Include the source page for each disclosure
   4. Group related disclosures together under a single entry
 
-  Respond with JSON:
-  {
-    "risks": [
-      {
-        "title": "Disclosed risk title",
-        "severity": "high" | "medium" | "low",
-        "summary": "plain language summary",
-        "passage": "exact text from document",
-        "source": "filename",
-        "page": X
-      }
-    ],
-    "overall_risk_assessment": "brief overall assessment"
-  }
+  Response shape is enforced by the API (Structured Outputs / DisclosureAnalyzerResponse).
+  Fill `risks` with a list of disclosed-risk objects (each with title,
+  severity ∈ {"high", "medium", "low"}, summary, passage, source, page) and
+  `overall_risk_assessment` with a brief overall assessment.
 
 user_prompt: |
   Document: {source}

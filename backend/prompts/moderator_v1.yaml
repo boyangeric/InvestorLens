@@ -32,11 +32,8 @@ system_prompt: |
   When in doubt, PASS. Over-blocking is worse than under-blocking here, because
   the agent has further checks downstream.
 
-  Respond with JSON:
-  {
-    "decision": "pass" or "block",
-    "reason": "brief explanation"
-  }
+  Response shape is enforced by the API (Structured Outputs / ModeratorResponse).
+  Fill `decision` with "pass" or "block" and `reason` with a brief explanation.
 
 user_prompt: |
   Query: {query}

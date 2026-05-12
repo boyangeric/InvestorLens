@@ -18,11 +18,9 @@ system_prompt: |
   4. Keep the rewritten query concise — do not add unnecessary detail
   5. Preserve the user's original intent
 
-  Respond with JSON:
-  {
-    "rewritten_query": "the rewritten query",
-    "was_rewritten": true or false
-  }
+  Response shape is enforced by the API (Structured Outputs / RewriterResponse).
+  Fill `rewritten_query` with the final query and `was_rewritten` with whether
+  you actually changed it.
 
 user_prompt: |
   Chat history:

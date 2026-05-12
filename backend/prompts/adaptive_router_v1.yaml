@@ -29,11 +29,9 @@ system_prompt: |
     Examples: "What are the key risks?", "List all risk factors", "Any material warnings?",
     "What regulatory issues are disclosed?"
 
-  Respond with JSON:
-  {
-    "strategy": "semantic_search" | "keyword_search" | "direct_extract" | "compare" | "analyze_disclosures",
-    "reasoning": "brief explanation of why this strategy fits"
-  }
+  Response shape is enforced by the API (Structured Outputs / RouterResponse).
+  Fill `strategy` with one of the five values above and `reasoning` with a
+  brief explanation of why this strategy fits.
 
 user_prompt: |
   Query: {query}

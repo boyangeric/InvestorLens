@@ -15,6 +15,8 @@ from openai import OpenAI
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
+from backend.agent.utils import embeddings_with_retry
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -77,7 +79,8 @@ def embed_texts(client: OpenAI, texts: list[str]) -> list[list[float]]:
         batch = texts[i : i + EMBED_BATCH_SIZE]
         logger.info("Embedding batch %d–%d of %d", i, i + len(batch), len(texts))
 
-        response = client.embeddings.create(
+        response = embeddings_with_retry(
+            client,
             input=batch,
             model=EMBEDDING_MODEL,
         )

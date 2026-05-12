@@ -8,8 +8,9 @@ and prompt injection from consuming retrieval/generation resources.
 
 import logging
 
+from backend.agent.schemas import ModeratorResponse
 from backend.agent.state import AgentState
-from backend.agent.utils import call_llm, load_prompt
+from backend.agent.utils import call_llm_structured, load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +28,11 @@ def moderator(state: AgentState) -> dict:
     query = state["query"]
     logger.info("Moderator: checking query — %s", query[:80])
 
-    result = call_llm(PROMPT, {"query": query})
-    response = result["response"]
+    result = call_llm_structured(PROMPT, {"query": query}, ModeratorResponse)
+    response: ModeratorResponse = result["response"]
 
-    decision = response.get("decision", "block")
-    reason = response.get("reason", "No reason provided")
+    decision = response.decision
+    reason = response.reason
 
     # Build trace entry for observability
     trace_entry = {
@@ -41,6 +42,7 @@ def moderator(state: AgentState) -> dict:
         "duration_ms": result["duration_ms"],
         "tokens_in": result["tokens_in"],
         "tokens_out": result["tokens_out"],
+        "cost_usd": result["cost_usd"],
     }
 
     node_trace = state.get("node_trace", []) + [trace_entry]

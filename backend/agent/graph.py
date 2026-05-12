@@ -11,15 +11,26 @@ This wires all nodes together with conditional edges:
                                   │
                                   │(otherwise)
                                   ↓
-                              Grader ─(retry)──→ Rewriter
+                              Grader ─(retry)─────────────────→ Rewriter
                                   │
-                                  │(generate)
-                                  ↓
-                              Generator → END
+                                  │(grounded)              (corpus_miss)
+                                  ↓                            ↓
+                              Generator → Faithfulness ─(ok)─→ END
+                                              │
+                                              │(unsupported)
+                                              ↓
+                                          General Generator → END
 
-The Grader → Rewriter cycle runs up to 2 retries before falling back to
-generation. The Disclosure Analyzer branch pauses before execution so a
-human can review the query and the retrieved source material (HITL via
+Two CRAG-style fallback gates protect grounded answers:
+  1. Grader → after retries, if relevant_docs < MIN_RELEVANT, route directly
+     to `general_generator`.
+  2. Faithfulness → after generation, audit each claim against the cited
+     chunks. If unsupported (citation hallucination), fall back to
+     `general_generator` so the user sees a clearly-labelled general-
+     knowledge answer instead of a misleading grounded one.
+
+The Disclosure Analyzer branch pauses before execution so a human can
+review the query and the retrieved source material (HITL via
 `interrupt_before`).
 
 The retriever runs for ALL strategies — including `analyze_disclosures` —
@@ -39,12 +50,18 @@ from langgraph.graph.state import CompiledStateGraph
 
 from backend.agent.nodes.adaptive_router import adaptive_router
 from backend.agent.nodes.disclosure_analyzer import disclosure_analyzer
+from backend.agent.nodes.faithfulness import faithfulness
+from backend.agent.nodes.general_generator import general_generator
 from backend.agent.nodes.generator import generator
 from backend.agent.nodes.grader import grader
 from backend.agent.nodes.moderator import moderator
 from backend.agent.nodes.retriever import retriever
 from backend.agent.nodes.rewriter import rewriter
 from backend.agent.state import AgentState
+
+# CRAG threshold — relevant docs needed to use the grounded generator.
+# Mirrors the grader's MIN_RELEVANT; below this we fall back to general knowledge.
+MIN_RELEVANT_FOR_GROUNDED = 2
 
 logger = logging.getLogger(__name__)
 
@@ -74,13 +91,33 @@ def route_after_retrieval(state: AgentState) -> str:
     return "grader"
 
 
+def route_after_faithfulness(state: AgentState) -> str:
+    """
+    Post-audit decision: keep the grounded answer or fall back.
+
+    If the audit found unsupported claims (citation hallucination), route to
+    `general_generator` so the user gets a clearly-labelled general-knowledge
+    answer instead of a misleading grounded one.
+    """
+    if state.get("faithful", True):
+        return "ok"
+    return "unsupported"
+
+
 def should_retry_after_grader(state: AgentState) -> str:
-    """If not enough relevant docs and retries remain, loop back to rewriter."""
+    """
+    Three-way CRAG decision after grading:
+      - retry        → loop back to rewriter (insufficient relevant docs, retries remain)
+      - generate     → grounded generator (enough relevant docs)
+      - corpus_miss  → general-knowledge fallback (still insufficient after retries)
+    """
     relevant = state.get("relevant_docs", [])
     retry_count = state.get("retry_count", 0)
 
-    if len(relevant) < 2 and retry_count < 2:
-        return "retry"
+    if len(relevant) < MIN_RELEVANT_FOR_GROUNDED:
+        if retry_count < 2:
+            return "retry"
+        return "corpus_miss"
     return "generate"
 
 
@@ -100,6 +137,8 @@ def build_graph() -> CompiledStateGraph:
     graph.add_node("retriever", retriever)
     graph.add_node("grader", grader)
     graph.add_node("generator", generator)
+    graph.add_node("faithfulness", faithfulness)
+    graph.add_node("general_generator", general_generator)
     graph.add_node("disclosure_analyzer", disclosure_analyzer)
 
     # Set entry point
@@ -125,15 +164,26 @@ def build_graph() -> CompiledStateGraph:
         {"disclosure_analyzer": "disclosure_analyzer", "grader": "grader"},
     )
 
-    # Grader → (retry → rewriter) | (generate → generator)
+    # Grader → (retry → rewriter) | (generate → generator) | (corpus_miss → general_generator)
     graph.add_conditional_edges(
         "grader",
         should_retry_after_grader,
-        {"retry": "rewriter", "generate": "generator"},
+        {
+            "retry": "rewriter",
+            "generate": "generator",
+            "corpus_miss": "general_generator",
+        },
     )
 
-    # Generator → END
-    graph.add_edge("generator", END)
+    # Generator → Faithfulness audit → (ok → END) | (unsupported → general_generator)
+    graph.add_edge("generator", "faithfulness")
+    graph.add_conditional_edges(
+        "faithfulness",
+        route_after_faithfulness,
+        {"ok": END, "unsupported": "general_generator"},
+    )
+
+    graph.add_edge("general_generator", END)
 
     # Disclosure Analyzer → END
     graph.add_edge("disclosure_analyzer", END)

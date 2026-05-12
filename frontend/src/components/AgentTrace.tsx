@@ -51,6 +51,16 @@ const NODE_META: Record<
     accent: "bg-emerald-500",
     tone: "text-emerald-700",
   },
+  faithfulness: {
+    label: "Faithfulness Audit",
+    accent: "bg-teal-500",
+    tone: "text-teal-700",
+  },
+  general_generator: {
+    label: "General Knowledge Fallback",
+    accent: "bg-slate-400",
+    tone: "text-slate-700",
+  },
   disclosure_analyzer: {
     label: "Disclosure Analyzer",
     accent: "bg-rose-500",
@@ -59,15 +69,46 @@ const NODE_META: Record<
 };
 
 export function AgentTrace({ liveTrace, isThinking }: Props) {
+  // Running session totals — recomputed every render from the live trace.
+  // Each entry's `cost_usd` is set by call_llm, so the sum here is the
+  // session-to-date cost without any extra plumbing from the backend.
+  const sessionCost = liveTrace.reduce(
+    (acc, e) => acc + (typeof e.cost_usd === "number" ? e.cost_usd : 0),
+    0,
+  );
+  const sessionTokensIn = liveTrace.reduce(
+    (acc, e) => acc + (typeof e.tokens_in === "number" ? e.tokens_in : 0),
+    0,
+  );
+  const sessionTokensOut = liveTrace.reduce(
+    (acc, e) => acc + (typeof e.tokens_out === "number" ? e.tokens_out : 0),
+    0,
+  );
+
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-slate-200/70 bg-white/70 px-6 py-4 backdrop-blur">
-        <h2 className="text-[13px] font-semibold tracking-tight text-slate-900">
-          Reasoning trace
-        </h2>
-        <p className="mt-0.5 text-[11px] text-slate-500">
-          Live LangGraph execution
-        </p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-[13px] font-semibold tracking-tight text-slate-900">
+              Reasoning trace
+            </h2>
+            <p className="mt-0.5 text-[11px] text-slate-500">
+              Live LangGraph execution
+            </p>
+          </div>
+          {liveTrace.length > 0 && (
+            <div className="text-right">
+              <div className="font-mono text-[11px] tabular-nums font-semibold text-slate-900">
+                ${sessionCost.toFixed(4)}
+              </div>
+              <div className="font-mono text-[10px] tabular-nums text-slate-400">
+                {sessionTokensIn.toLocaleString()}↓{" "}
+                {sessionTokensOut.toLocaleString()}↑
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-5">
@@ -204,11 +245,26 @@ function TraceDetails({ entry }: { entry: TraceEntry }) {
       value: `${Math.round((entry.confidence as number) * 100)}%`,
     });
   }
+  if (entry.node === "general_generator") {
+    details.push({ label: "source", value: "general knowledge" });
+  }
+  if (entry.node === "faithfulness" && typeof entry.faithful === "boolean") {
+    details.push({
+      label: "verdict",
+      value: entry.faithful ? "faithful" : "unsupported",
+    });
+  }
   if (typeof entry.tokens_in === "number" && typeof entry.tokens_out === "number") {
     details.push({
       label: "tokens",
       value: `${entry.tokens_in}↓ ${entry.tokens_out}↑`,
     });
+  }
+  if (typeof entry.cost_usd === "number" && entry.cost_usd > 0) {
+    // Sub-cent costs need 4 decimals to be readable; cents+ get 3.
+    const cost = entry.cost_usd as number;
+    const formatted = cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3);
+    details.push({ label: "cost", value: `$${formatted}` });
   }
 
   if (details.length === 0) return null;

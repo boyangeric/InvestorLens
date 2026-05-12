@@ -13,14 +13,13 @@ fundamentally different retrieval approaches.
 
 import logging
 
+from backend.agent.schemas import RouterResponse
 from backend.agent.state import AgentState
-from backend.agent.utils import call_llm, load_prompt
+from backend.agent.utils import call_llm_structured, load_prompt
 
 logger = logging.getLogger(__name__)
 
 PROMPT = load_prompt("adaptive_router_v1")
-
-VALID_STRATEGIES = {"semantic_search", "keyword_search", "direct_extract", "compare", "analyze_disclosures"}
 
 
 def adaptive_router(state: AgentState) -> dict:
@@ -33,16 +32,14 @@ def adaptive_router(state: AgentState) -> dict:
     query = state["query"]
     logger.info("Router: classifying query — %s", query[:80])
 
-    result = call_llm(PROMPT, {"query": query})
-    response = result["response"]
+    # Structured Outputs constrains `strategy` to the Literal enum in
+    # RouterResponse, so the previous fallback-to-semantic_search guard is
+    # no longer reachable — an invalid value cannot leave the API.
+    result = call_llm_structured(PROMPT, {"query": query}, RouterResponse)
+    response: RouterResponse = result["response"]
 
-    strategy = response.get("strategy", "semantic_search")
-    reasoning = response.get("reasoning", "")
-
-    # Fallback to semantic_search if LLM returns an invalid strategy
-    if strategy not in VALID_STRATEGIES:
-        logger.warning("Router returned invalid strategy '%s', falling back to semantic_search", strategy)
-        strategy = "semantic_search"
+    strategy = response.strategy
+    reasoning = response.reasoning
 
     trace_entry = {
         "node": "router",
@@ -51,6 +48,7 @@ def adaptive_router(state: AgentState) -> dict:
         "duration_ms": result["duration_ms"],
         "tokens_in": result["tokens_in"],
         "tokens_out": result["tokens_out"],
+        "cost_usd": result["cost_usd"],
     }
 
     node_trace = state.get("node_trace", []) + [trace_entry]

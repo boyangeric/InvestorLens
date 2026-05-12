@@ -11,8 +11,9 @@ just fail silently on poor retrieval, it actively tries to fix it.
 
 import logging
 
+from backend.agent.schemas import GraderResponse
 from backend.agent.state import AgentState
-from backend.agent.utils import call_llm, load_prompt
+from backend.agent.utils import call_llm_structured, load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -42,23 +43,27 @@ def grader(state: AgentState) -> dict:
     total_tokens_in = 0
     total_tokens_out = 0
     total_duration_ms = 0
+    total_cost_usd = 0.0
 
     for doc in retrieved_docs:
-        result = call_llm(PROMPT, {
-            "query": query,
-            "chunk_text": doc["content"],
-            "source": doc.get("source", "unknown"),
-            "page": doc.get("page", 0),
-        })
+        result = call_llm_structured(
+            PROMPT,
+            {
+                "query": query,
+                "chunk_text": doc["content"],
+                "source": doc.get("source", "unknown"),
+                "page": doc.get("page", 0),
+            },
+            GraderResponse,
+        )
 
         total_tokens_in += result["tokens_in"]
         total_tokens_out += result["tokens_out"]
         total_duration_ms += result["duration_ms"]
+        total_cost_usd += result["cost_usd"]
 
-        response = result["response"]
-        is_relevant = response.get("relevant", 0) == 1
-
-        if is_relevant:
+        response: GraderResponse = result["response"]
+        if response.relevant == 1:
             relevant_docs.append(doc)
 
     # Decide whether we have enough relevant chunks
@@ -79,6 +84,7 @@ def grader(state: AgentState) -> dict:
         "duration_ms": total_duration_ms,
         "tokens_in": total_tokens_in,
         "tokens_out": total_tokens_out,
+        "cost_usd": total_cost_usd,
         "chunks_graded": len(retrieved_docs),
         "chunks_relevant": len(relevant_docs),
     }

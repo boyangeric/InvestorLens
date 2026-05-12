@@ -22,7 +22,9 @@ class AgentState(TypedDict):
 
     # --- Generation ---
     generation: str                 # Final generated answer
-    confidence: float               # Generator's self-assessed confidence (0.0–1.0)
+    confidence: float               # Generator's self-assessed confidence (0.0–1.0); only meaningful when grounded
+    grounded: bool                  # True if answer is grounded in retrieved docs; False if from general knowledge
+    faithful: bool                  # True if grounded claims are actually supported by cited chunks (post-gen audit)
 
     # --- Control flow ---
     retry_count: int                # Tracks grader→rewriter loop iterations (max 2)

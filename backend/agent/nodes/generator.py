@@ -13,31 +13,13 @@ whether human review is needed.
 
 import logging
 
+from backend.agent.schemas import GeneratorResponse
 from backend.agent.state import AgentState
-from backend.agent.utils import call_llm, load_prompt
+from backend.agent.utils import call_llm_structured, format_chunks_safely, load_prompt
 
 logger = logging.getLogger(__name__)
 
 PROMPT = load_prompt("generator_v1")
-
-
-def _format_context(docs: list[dict]) -> str:
-    """
-    Format retrieved chunks into a numbered context string for the LLM.
-
-    Each chunk is labelled with source and page so the LLM can cite it.
-    """
-    if not docs:
-        return "No relevant context available."
-
-    parts = []
-    for i, doc in enumerate(docs, 1):
-        source = doc.get("source", "unknown")
-        page = doc.get("page", 0)
-        content = doc.get("content", "")
-        parts.append(f"[{i}] Source: {source}, Page: {page}\n{content}")
-
-    return "\n\n---\n\n".join(parts)
 
 
 def generator(state: AgentState) -> dict:
@@ -52,20 +34,25 @@ def generator(state: AgentState) -> dict:
 
     logger.info("Generator: synthesising answer from %d chunks", len(relevant_docs))
 
-    context = _format_context(relevant_docs)
+    # Chunks are wrapped in <chunk> envelopes so the LLM can distinguish
+    # untrusted document data from system instructions — see utils.py.
+    context = format_chunks_safely(relevant_docs)
 
-    result = call_llm(PROMPT, {
-        "query": query,
-        "context": context,
-    })
+    result = call_llm_structured(
+        PROMPT,
+        {"query": query, "context": context},
+        GeneratorResponse,
+    )
 
-    response = result["response"]
-    answer = response.get("answer", "I could not generate an answer.")
-    confidence = float(response.get("confidence", 0.0))
-    reasoning = response.get("reasoning", "")
-    sources = response.get("sources", [])
+    response: GeneratorResponse = result["response"]
+    answer = response.answer
+    # Clamp into [0, 1] — Structured Outputs enforces the float type but
+    # doesn't enforce numeric bounds, so the model could still return 1.2.
+    confidence = max(0.0, min(1.0, response.confidence))
+    reasoning = response.reasoning
+    sources = response.sources
 
-    logger.info("Generator: confidence=%.2f", confidence)
+    logger.info("Generator: grounded, confidence=%.2f", confidence)
 
     trace_entry = {
         "node": "generator",
@@ -74,6 +61,8 @@ def generator(state: AgentState) -> dict:
         "duration_ms": result["duration_ms"],
         "tokens_in": result["tokens_in"],
         "tokens_out": result["tokens_out"],
+        "cost_usd": result["cost_usd"],
+        "grounded": True,
         "confidence": confidence,
         "reasoning": reasoning,
         "sources": sources,
@@ -84,6 +73,7 @@ def generator(state: AgentState) -> dict:
     return {
         "generation": answer,
         "confidence": confidence,
+        "grounded": True,
         "current_node": "generator",
         "node_trace": node_trace,
     }

@@ -24,6 +24,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from langchain_core.runnables import RunnableConfig
 
 from backend.agent.graph import app as agent_graph
+from backend.agent.utils import aggregate_usage
 
 logger = logging.getLogger(__name__)
 
@@ -42,20 +43,20 @@ async def _stream_graph(websocket: WebSocket, initial_input, session_id: str) ->
     `initial_input` is either a dict (new query) or None (resume after pause).
     """
     config = _config(session_id)
-    last_state: dict = {}
 
     try:
-        # astream yields state after each node completes — perfect for live trace.
-        # When the graph hits an interrupt, the event may include a sentinel
-        # whose value isn't a dict (e.g., __interrupt__ → tuple). Guard for it.
+        # astream yields per-node *deltas* (not accumulated state) — perfect
+        # for live trace, but useless for the final answer payload because the
+        # last node's delta only contains the fields *that node* writes.
+        # E.g. faithfulness returns {faithful, node_trace} with no `generation`.
+        # We use the deltas only to push trace events to the UI, then read the
+        # full accumulated state from the checkpointer below.
         async for event in agent_graph.astream(initial_input, config=config):
             if not isinstance(event, dict):
                 continue
             for node_name, partial_state in event.items():
                 if not isinstance(partial_state, dict):
                     continue  # skip interrupt sentinels and similar non-state events
-
-                last_state = partial_state
 
                 trace = partial_state.get("node_trace", [])
                 latest_trace = trace[-1] if trace else {}
@@ -70,24 +71,30 @@ async def _stream_graph(websocket: WebSocket, initial_input, session_id: str) ->
         await websocket.send_json({"type": "error", "message": str(e)})
         return
 
-    # After streaming, check if we're paused at an interrupt
+    # Pull the full accumulated state from the checkpointer — this has every
+    # field every node has written, not just the last delta.
     snapshot = agent_graph.get_state(config)
+    final_state = snapshot.values or {}
+
+    # If we're paused at an interrupt, surface the approval modal instead.
     if snapshot.next:
-        # Paused — tell the frontend we need human review
         await websocket.send_json({
             "type": "review_required",
             "next_node": snapshot.next[0],
-            "query": snapshot.values.get("query", ""),
-            "reasoning": snapshot.values.get("strategy_reasoning", ""),
+            "query": final_state.get("query", ""),
+            "reasoning": final_state.get("strategy_reasoning", ""),
         })
         return
 
     # Otherwise we've reached END — send the final answer
+    trace = final_state.get("node_trace", [])
     await websocket.send_json({
         "type": "final_answer",
-        "answer": last_state.get("generation", ""),
-        "confidence": last_state.get("confidence", 0.0),
-        "trace": last_state.get("node_trace", []),
+        "answer": final_state.get("generation", ""),
+        "confidence": final_state.get("confidence", 0.0),
+        "grounded": final_state.get("grounded", True),
+        "trace": trace,
+        "token_usage": aggregate_usage(trace),
     })
 
 

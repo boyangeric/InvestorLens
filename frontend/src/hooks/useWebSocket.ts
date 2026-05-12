@@ -18,7 +18,20 @@ export type TraceEntry = {
   node: string;
   status?: string;
   duration_ms?: number;
+  tokens_in?: number;
+  tokens_out?: number;
+  cost_usd?: number;       // USD, computed from MODEL_PRICES_USD_PER_M
+  model?: string;
   [key: string]: unknown;
+};
+
+export type TokenUsage = {
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+  calls: number;
+  by_node: Record<string, { tokens_in: number; tokens_out: number; cost_usd: number; calls: number }>;
+  by_model: Record<string, { tokens_in: number; tokens_out: number; cost_usd: number; calls: number }>;
 };
 
 export type ServerMessage =
@@ -33,7 +46,9 @@ export type ServerMessage =
       type: "final_answer";
       answer: string;
       confidence: number;
+      grounded?: boolean;
       trace: TraceEntry[];
+      token_usage?: TokenUsage;
     }
   | { type: "error"; message: string };
 
@@ -43,6 +58,7 @@ export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   confidence?: number;
+  grounded?: boolean;
   trace?: TraceEntry[];
 };
 
@@ -116,6 +132,7 @@ export function useWebSocket(sessionId: string) {
               role: "assistant",
               content: msg.answer,
               confidence: msg.confidence,
+              grounded: msg.grounded ?? true,
               trace: msg.trace,
             },
           ]);

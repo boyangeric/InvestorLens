@@ -6,11 +6,11 @@ Uses GPT-4o-mini to rewrite queries like "what about their revenue?" into
 Only rewrites when necessary — clear, self-contained queries pass through unchanged.
 """
 
-import json
 import logging
 
+from backend.agent.schemas import RewriterResponse
 from backend.agent.state import AgentState
-from backend.agent.utils import call_llm, load_prompt
+from backend.agent.utils import call_llm_structured, load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -38,14 +38,15 @@ def rewriter(state: AgentState) -> dict:
 
     logger.info("Rewriter: processing query — %s", query[:80])
 
-    result = call_llm(PROMPT, {
-        "query": query,
-        "chat_history": history_text,
-    })
-    response = result["response"]
+    result = call_llm_structured(
+        PROMPT,
+        {"query": query, "chat_history": history_text},
+        RewriterResponse,
+    )
+    response: RewriterResponse = result["response"]
 
-    rewritten = response.get("rewritten_query", query)
-    was_rewritten = response.get("was_rewritten", False)
+    rewritten = response.rewritten_query
+    was_rewritten = response.was_rewritten
 
     trace_entry = {
         "node": "rewriter",
@@ -54,6 +55,7 @@ def rewriter(state: AgentState) -> dict:
         "duration_ms": result["duration_ms"],
         "tokens_in": result["tokens_in"],
         "tokens_out": result["tokens_out"],
+        "cost_usd": result["cost_usd"],
     }
 
     node_trace = state.get("node_trace", []) + [trace_entry]

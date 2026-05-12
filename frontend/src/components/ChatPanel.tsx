@@ -112,16 +112,26 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         <div className="whitespace-pre-wrap break-words leading-relaxed">
           {message.content}
         </div>
-        {!isUser && message.confidence !== undefined && (
+        {!isUser && message.grounded === false ? (
           <div className="mt-2.5 flex items-center gap-2 border-t border-slate-100 pt-2 text-[10px] text-slate-500">
-            <span className="font-medium uppercase tracking-[0.06em]">
-              Confidence
-            </span>
-            <ConfidenceBar value={message.confidence} />
-            <span className="font-mono font-semibold tabular-nums text-slate-700">
-              {Math.round(message.confidence * 100)}%
+            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-slate-400" />
+            <span className="font-medium uppercase tracking-[0.06em] text-slate-500">
+              Answered from general knowledge
             </span>
           </div>
+        ) : (
+          !isUser &&
+          message.confidence !== undefined && (
+            <div className="mt-2.5 flex items-center gap-2 border-t border-slate-100 pt-2 text-[10px] text-slate-500">
+              <span className="font-medium uppercase tracking-[0.06em]">
+                Confidence
+              </span>
+              <ConfidenceBar value={message.confidence} />
+              <span className="font-mono font-semibold tabular-nums text-slate-700">
+                {Math.round(message.confidence * 100)}%
+              </span>
+            </div>
+          )
         )}
       </div>
     </div>

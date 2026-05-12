@@ -14,30 +14,55 @@ Upload financial documents (annual reports, earnings transcripts, ETF factsheets
 
 ## Quick Start
 
+### First-time setup
+
 ```bash
-# 1. Clone and configure
+# 1. Configure secrets
 cp .env.example .env
 # Fill in your Azure OpenAI and LangSmith credentials
 
-# 2. Start Qdrant
-docker compose up -d
+# 2. Backend dependencies (one-off)
+python -m venv .venv
+.venv/bin/pip install -r backend/requirements.txt
 
-# 3. Install backend dependencies
-cd backend
-pip install -r requirements.txt
-
-# 4. Install frontend dependencies
-cd frontend
-npm install
-
-# 5. Run backend
-uvicorn backend.main:app --reload
-
-# 6. Run frontend
-cd frontend
-npm run dev
+# 3. Frontend dependencies (one-off)
+cd frontend && npm install && cd ..
 ```
+
+### Running the project
+
+Run each command in its own terminal from the project root
+
+```bash
+# 1. Qdrant (vector DB)
+docker compose up -d qdrant
+
+# 2. Backend (FastAPI + LangGraph, :8000)
+.venv/bin/uvicorn backend.api.main:app --port 8000 --reload
+
+# 3. Frontend (Vite, :5173)
+cd frontend && npm run dev
+```
+
+Then open **http://localhost:5173**.
+
+To stop: `Ctrl-C` in the backend and frontend terminals, then
+`docker compose down`.
 
 ## Architecture
 
 See [docs/architecture.md](docs/architecture.md) for the full system design.
+
+## Evaluation
+
+End-to-end behavioural eval suite — 13 questions across 5 categories
+(factual, comparative, extraction, adversarial, out-of-scope) with 7 binary
+metrics including citation grounding and faithfulness. CI-hookable via a
+pass-rate threshold.
+
+```bash
+# After ingesting the sample corpus
+.venv/bin/python -m backend.eval.run_eval --verbose
+```
+
+See [backend/eval/README.md](backend/eval/README.md) for details.

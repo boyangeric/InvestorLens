@@ -18,6 +18,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 from backend.agent.state import AgentState
+from backend.agent.utils import embeddings_with_retry
 
 load_dotenv()
 
@@ -40,7 +41,7 @@ TOP_K = {
 def _get_embedding(text: str) -> list[float]:
     """Generate an embedding vector for the given text."""
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    response = client.embeddings.create(model=EMBEDDING_MODEL, input=text)
+    response = embeddings_with_retry(client, model=EMBEDDING_MODEL, input=text)
     return response.data[0].embedding
 
 

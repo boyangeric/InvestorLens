@@ -22,8 +22,9 @@ When to route here (decided in the router's conditional edge):
 
 import logging
 
+from backend.agent.schemas import DisclosureAnalyzerResponse
 from backend.agent.state import AgentState
-from backend.agent.utils import call_llm, load_prompt
+from backend.agent.utils import call_llm_structured, load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -45,22 +46,16 @@ def _format_content(docs: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def _format_disclosure_report(risks: list[dict], assessment: str) -> str:
-    """Turn the structured disclosure JSON into a readable answer for the user."""
+def _format_disclosure_report(risks: list, assessment: str) -> str:
+    """Turn the structured disclosure list into a readable answer for the user."""
     if not risks:
         return f"No material risks disclosed.\n\n{assessment}"
 
     lines = ["## Disclosed Risks\n"]
     for risk in risks:
-        severity = risk.get("severity", "unknown").upper()
-        title = risk.get("title", "Untitled disclosure")
-        summary = risk.get("summary", "")
-        source = risk.get("source", "unknown")
-        page = risk.get("page", 0)
-
-        lines.append(f"### [{severity}] {title}")
-        lines.append(f"{summary}")
-        lines.append(f"*[Source: {source}, Page {page}]*\n")
+        lines.append(f"### [{risk.severity.upper()}] {risk.title}")
+        lines.append(f"{risk.summary}")
+        lines.append(f"*[Source: {risk.source}, Page {risk.page}]*\n")
 
     lines.append(f"\n**Overall Assessment:** {assessment}")
     return "\n".join(lines)
@@ -81,18 +76,18 @@ def disclosure_analyzer(state: AgentState) -> dict:
     content = _format_content(docs)
     source = docs[0].get("source", "unknown") if docs else "unknown"
 
-    result = call_llm(PROMPT, {
-        "source": source,
-        "disclosure_topic": query,
-        "content": content,
-    })
+    result = call_llm_structured(
+        PROMPT,
+        {"source": source, "disclosure_topic": query, "content": content},
+        DisclosureAnalyzerResponse,
+    )
 
-    response = result["response"]
-    risks = response.get("risks", [])
-    assessment = response.get("overall_risk_assessment", "")
+    response: DisclosureAnalyzerResponse = result["response"]
+    risks = response.risks
+    assessment = response.overall_risk_assessment
 
     # Confidence is derived from how many disclosures were found + severity distribution
-    high_severity_count = sum(1 for r in risks if r.get("severity") == "high")
+    high_severity_count = sum(1 for r in risks if r.severity == "high")
     confidence = 0.9 if risks else 0.5  # Lower confidence if none found
 
     answer = _format_disclosure_report(risks, assessment)
@@ -110,6 +105,7 @@ def disclosure_analyzer(state: AgentState) -> dict:
         "duration_ms": result["duration_ms"],
         "tokens_in": result["tokens_in"],
         "tokens_out": result["tokens_out"],
+        "cost_usd": result["cost_usd"],
         "disclosed_risks_found": len(risks),
         "high_severity": high_severity_count,
         "requires_review": True,  # Disclosure output ALWAYS requires human review
