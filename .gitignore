@@ -33,3 +33,6 @@ qdrant_storage/
 
 # LangSmith
 .langsmith/
+
+# Claude Code project instructions (local only)
+CLAUDE.md

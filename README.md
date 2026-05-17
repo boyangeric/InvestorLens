@@ -1,16 +1,19 @@
 # InvestorLens
 
-An agentic financial document analyst powered by LangGraph, Azure OpenAI, and Qdrant.
+An agentic financial document analyst powered by LangGraph, OpenAI, and Qdrant.
 
-Upload financial documents (annual reports, earnings transcripts, ETF factsheets) and interact with them through an intelligent agent that adaptively chooses the best retrieval strategy for each query.
+Upload financial documents (annual reports, earnings transcripts, ETF factsheets) and interact with them through an intelligent agent that adaptively chooses the best retrieval strategy for each query — and reaches out to live market and news data when the question needs current state the report can't answer.
 
 ## Features
 
-- **Adaptive RAG**: Agent selects semantic search, keyword search, structured extraction, or multi-document comparison per query
-- **LangGraph Agent**: StateGraph with conditional routing, cyclic self-correction, and human-in-the-loop
-- **MCP Server**: Tools exposed via Model Context Protocol for interoperability
-- **Real-time Trace**: Frontend shows the agent's reasoning path as it executes
-- **Multi-model Routing**: GPT-4o for generation, GPT-4o-mini for routing/grading (cost optimization)
+- **Adaptive RAG**: Agent selects semantic search, keyword search, structured extraction, multi-document comparison, or hybrid-live per query
+- **Live tool calling**: OpenAI native parallel tool calling (`parallel_tool_calls=True`) fans out to yfinance + Tavily news concurrently, so wall-time is `max(latencies)` not the sum
+- **Human-in-the-loop**: LangGraph `interrupt_after` on the metric extractor — analysts approve / edit / skip extracted figures before they propagate, and the verdict is stamped on every answer for audit
+- **Citation provenance**: Distinct `[Source: file.pdf, Page X]` vs `[Live: yfinance, as_of YYYY-MM-DD]` markers so readers can tell document-grounded claims from current external state
+- **Faithfulness audit**: Post-generation LLM-as-judge check on doc-grounded answers; skipped on hybrid-live branches whose Pydantic-typed tool outputs are verifiable by construction
+- **MCP server**: 5 tools (`search_docs`, `get_market_quote`, `search_news`, `extract_financials`, `compare_docs`) exposed via Model Context Protocol — usable from Claude Desktop, VS Code, any MCP client
+- **Real-time trace**: Frontend streams each LangGraph node as it fires, with per-node tokens / cost / latency and session-to-date spend
+- **Multi-model routing**: GPT-4o for generation/extraction, GPT-4o-mini for moderation/routing/grading/tool-planning (cost optimisation)
 
 ## Quick Start
 
@@ -19,7 +22,9 @@ Upload financial documents (annual reports, earnings transcripts, ETF factsheets
 ```bash
 # 1. Configure secrets
 cp .env.example .env
-# Fill in your Azure OpenAI and LangSmith credentials
+# Fill in OPENAI_API_KEY (required) and LANGSMITH_API_KEY (optional, for tracing).
+# TAVILY_API_KEY is optional — leave blank to disable the news tool;
+# the agent will still answer doc-only and hybrid-quote-only questions.
 
 # 2. Backend dependencies (one-off)
 python -m venv .venv
@@ -55,10 +60,10 @@ See [docs/architecture.md](docs/architecture.md) for the full system design.
 
 ## Evaluation
 
-End-to-end behavioural eval suite — 13 questions across 5 categories
-(factual, comparative, extraction, adversarial, out-of-scope) with 7 binary
-metrics including citation grounding and faithfulness. CI-hookable via a
-pass-rate threshold.
+End-to-end behavioural eval suite — 16 questions across 6 categories
+(factual, comparative, extraction, adversarial, out-of-scope, hybrid-live)
+with binary metrics including citation grounding, faithfulness, and
+expected routing strategy. CI-hookable via a pass-rate threshold.
 
 ```bash
 # After ingesting the sample corpus
