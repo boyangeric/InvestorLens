@@ -191,20 +191,33 @@ def load_prompt(template_name: str) -> dict:
 # prompt-engineering guides both recommend. The escape-sanitisation closes
 # the most common bypass.
 
-# Match a closing-chunk tag, tolerant of case and whitespace.
-_CHUNK_CLOSE_RE = re.compile(r"</\s*chunk\s*>", re.IGNORECASE)
+# Match a closing tag for any wrapper we use to delimit untrusted content,
+# tolerant of case and whitespace. Adding a new wrapper means adding it here.
+_WRAPPER_CLOSE_RE = re.compile(
+    r"</\s*(chunk|market_quote|news_article)\s*>",
+    re.IGNORECASE,
+)
 
 
-def _sanitize_chunk_content(text: str) -> str:
+def _sanitize_wrapped_content(text: str) -> str:
     """
-    Neutralise injection vectors inside chunk text before XML-delimiting.
+    Neutralise injection vectors inside any wrapped data region.
 
-    The wrapping format is `<chunk>…</chunk>`, so a malicious document could
-    include a literal `</chunk>` to break out of the data region and inject
-    instructions. We replace any closing-tag-shaped substring with a visually
-    similar but inert form (`</_chunk>`) so the wrapper stays intact.
+    Untrusted content is delimited by XML-style tags (e.g. `<chunk>…</chunk>`,
+    `<market_quote>…</market_quote>`). If the content embeds a literal closing
+    tag, it can break out of the data region and inject instructions. We
+    replace any closing-tag-shaped substring with an inert canonical form
+    (`</_chunk>`, `</_market_quote>`, …) so the wrapper stays intact regardless
+    of the input's casing or whitespace.
     """
-    return _CHUNK_CLOSE_RE.sub("</_chunk>", text or "")
+    return _WRAPPER_CLOSE_RE.sub(
+        lambda m: f"</_{m.group(1).lower()}>",
+        text or "",
+    )
+
+
+# Back-compat alias — older call sites still import this name.
+_sanitize_chunk_content = _sanitize_wrapped_content
 
 
 def format_chunks_safely(docs: list[dict]) -> str:
@@ -230,11 +243,78 @@ def format_chunks_safely(docs: list[dict]) -> str:
     for i, doc in enumerate(docs, 1):
         source = html.escape(str(doc.get("source", "unknown")), quote=True)
         page = doc.get("page", 0)
-        content = _sanitize_chunk_content(str(doc.get("content", "")))
+        content = _sanitize_wrapped_content(str(doc.get("content", "")))
         parts.append(
             f'<chunk index="{i}" source="{source}" page="{page}">\n'
             f"{content}\n"
             f"</chunk>"
+        )
+
+    return "\n\n".join(parts)
+
+
+def format_live_data_safely(
+    quotes: list[dict] | None,
+    news: list[dict] | None,
+) -> str:
+    """
+    Render live tool outputs (yfinance quotes, Tavily news) as XML-delimited
+    data blocks for the generator. Same threat model as `format_chunks_safely`:
+    Tavily snippets are arbitrary third-party text and could include closing-
+    tag breakout attempts, so all content fields are sanitised and HTML-
+    escaped before they touch the wrapper tags.
+
+    Returns a "(none — answer from document context only)" sentinel when both
+    inputs are empty so the prompt section has a non-empty rendering and the
+    LLM can't be confused by an empty placeholder.
+    """
+    quotes = quotes or []
+    news = news or []
+    if not quotes and not news:
+        return "(none — answer from document context only)"
+
+    parts: list[str] = []
+    for q in quotes:
+        ticker = html.escape(str(q.get("ticker", "")), quote=True)
+        source = html.escape(str(q.get("source", "yfinance")), quote=True)
+        as_of = html.escape(str(q.get("as_of", "")), quote=True)
+        name = _sanitize_wrapped_content(str(q.get("name", "")))
+        price = q.get("price")
+        currency = q.get("currency", "")
+        change_pct = q.get("change_pct_day")
+        market_cap = q.get("market_cap")
+        low_52w = q.get("fifty_two_week_low")
+        high_52w = q.get("fifty_two_week_high")
+
+        body_lines = [
+            f"name: {name}",
+            f"price: {price} {currency}".rstrip(),
+        ]
+        if change_pct is not None:
+            body_lines.append(f"day_change: {change_pct}%")
+        if market_cap is not None:
+            body_lines.append(f"market_cap: {market_cap} {currency}".rstrip())
+        if low_52w is not None and high_52w is not None:
+            body_lines.append(f"52w_range: {low_52w} - {high_52w}")
+
+        parts.append(
+            f'<market_quote ticker="{ticker}" source="{source}" as_of="{as_of}">\n'
+            + "\n".join(body_lines)
+            + "\n</market_quote>"
+        )
+
+    for n in news:
+        source = html.escape(str(n.get("source", "unknown")), quote=True)
+        published = html.escape(str(n.get("published_at") or "unknown"), quote=True)
+        url = html.escape(str(n.get("url", "")), quote=True)
+        title = _sanitize_wrapped_content(str(n.get("title", "")))
+        snippet = _sanitize_wrapped_content(str(n.get("snippet", "")))
+
+        parts.append(
+            f'<news_article source="{source}" published_at="{published}" url="{url}">\n'
+            f"title: {title}\n"
+            f"snippet: {snippet}\n"
+            f"</news_article>"
         )
 
     return "\n\n".join(parts)

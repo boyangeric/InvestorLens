@@ -15,7 +15,12 @@ import logging
 
 from backend.agent.schemas import GeneratorResponse
 from backend.agent.state import AgentState
-from backend.agent.utils import call_llm_structured, format_chunks_safely, load_prompt
+from backend.agent.utils import (
+    call_llm_structured,
+    format_chunks_safely,
+    format_live_data_safely,
+    load_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +36,23 @@ def generator(state: AgentState) -> dict:
     """
     query = state["query"]
     relevant_docs = state.get("relevant_docs", [])
+    live_quotes = state.get("live_quotes", [])
+    live_news = state.get("live_news", [])
 
-    logger.info("Generator: synthesising answer from %d chunks", len(relevant_docs))
+    logger.info(
+        "Generator: synthesising from %d chunks, %d quotes, %d articles",
+        len(relevant_docs), len(live_quotes), len(live_news),
+    )
 
-    # Chunks are wrapped in <chunk> envelopes so the LLM can distinguish
-    # untrusted document data from system instructions — see utils.py.
+    # Chunks and live data are both wrapped in tagged envelopes so the LLM
+    # can distinguish untrusted retrieved content from system instructions
+    # and can cite them with the correct provenance format — see utils.py.
     context = format_chunks_safely(relevant_docs)
+    live_data = format_live_data_safely(live_quotes, live_news)
 
     result = call_llm_structured(
         PROMPT,
-        {"query": query, "context": context},
+        {"query": query, "context": context, "live_data": live_data},
         GeneratorResponse,
     )
 

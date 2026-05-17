@@ -7,7 +7,7 @@ This wires all nodes together with conditional edges:
       │
       │(continue)
       ↓
-  Rewriter → Router → Retriever ─(analyze_disclosures)─→ [INTERRUPT] Disclosure Analyzer → END
+  Rewriter → Router → Retriever ─(extract_metrics)─→ Metric Extractor → [INTERRUPT] → END
                                   │
                                   │(otherwise)
                                   ↓
@@ -29,17 +29,26 @@ Two CRAG-style fallback gates protect grounded answers:
      `general_generator` so the user sees a clearly-labelled general-
      knowledge answer instead of a misleading grounded one.
 
-The Disclosure Analyzer branch pauses before execution so a human can
-review the query and the retrieved source material (HITL via
-`interrupt_before`).
+The Metric Extractor branch is HITL-gated via `interrupt_after`. The node
+runs the extraction first, then the graph pauses with the actual numbers in
+state, so the human reviewer can verify the figures and their page citations
+before they propagate downstream. Approval resumes the graph; rejection
+overwrites the generation with a rejection message (handled in the API
+layer) and does not resume.
 
-The retriever runs for ALL strategies — including `analyze_disclosures` —
-so that disclosure analysis has actual document chunks to work with, and
-so the human reviewer can see what would be analysed before approving.
+The pause is AFTER the node, not before, because the reviewer is verifying
+the EXTRACTED FIGURES — they need to be computed first for the modal to be
+useful. Pausing before extraction would only let the reviewer approve an
+abstract operation, which adds friction without adding safety.
 
-"Disclosed risks" here means material business risks the company has disclosed
-in its own filings — NOT risky user queries or AI safety risk. The moderator
-handles query-level safety.
+The `hybrid_live` branch (retriever → live_tools → generator → END) is
+deliberately NOT HITL-gated. Live tool outputs (yfinance quotes, Tavily news)
+arrive as structured Pydantic models tagged with their source and timestamp,
+so the provenance is verifiable by construction rather than by human review.
+Live data is also read-only and ephemeral — there is no irreversible decision
+downstream of the quote like there is downstream of an extracted figure that
+flows into a comparison or recommendation. Different risk profile → different
+gating policy.
 """
 
 import logging
@@ -49,11 +58,13 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from backend.agent.nodes.adaptive_router import adaptive_router
-from backend.agent.nodes.disclosure_analyzer import disclosure_analyzer
 from backend.agent.nodes.faithfulness import faithfulness
+from backend.agent.nodes.finalize_extraction import finalize_extraction
 from backend.agent.nodes.general_generator import general_generator
 from backend.agent.nodes.generator import generator
 from backend.agent.nodes.grader import grader
+from backend.agent.nodes.live_tools import live_tools
+from backend.agent.nodes.metric_extractor import metric_extractor
 from backend.agent.nodes.moderator import moderator
 from backend.agent.nodes.retriever import retriever
 from backend.agent.nodes.rewriter import rewriter
@@ -81,14 +92,34 @@ def route_after_retrieval(state: AgentState) -> str:
     """
     After retrieval, branch based on the strategy chosen earlier by the router.
 
-    Disclosure queries skip the grader and go straight to disclosure_analyzer
-    (which is then HITL-gated). All other strategies go through the grader for
-    relevance scoring and the self-correcting loop.
+    - extract_metrics → metric_extractor (HITL-gated downstream)
+    - hybrid_live     → live_tools (parallel market + news fan-out)
+    - everything else → grader (relevance scoring + self-correcting loop)
     """
     strategy = state.get("retrieval_strategy", "semantic_search")
-    if strategy == "analyze_disclosures":
-        return "disclosure_analyzer"
+    if strategy == "extract_metrics":
+        return "metric_extractor"
+    if strategy == "hybrid_live":
+        return "live_tools"
     return "grader"
+
+
+def route_after_generator(state: AgentState) -> str:
+    """
+    Post-generation routing: do we run the faithfulness audit, or skip to END?
+
+    The audit checks claims against retrieved chunks. For `hybrid_live` answers,
+    half the claims come from LIVE tools (yfinance, Tavily) — by definition not
+    in any chunk — so the audit would always flag them as unsupported and
+    push us into the corpus-miss fallback, throwing away the live data.
+
+    Live tool outputs are already structured (Pydantic models from named APIs),
+    so the provenance for the live half is verifiable by construction rather
+    than by LLM audit. We trust the structured output and skip the audit.
+    """
+    if state.get("retrieval_strategy") == "hybrid_live":
+        return "skip_audit"
+    return "audit"
 
 
 def route_after_faithfulness(state: AgentState) -> str:
@@ -139,7 +170,9 @@ def build_graph() -> CompiledStateGraph:
     graph.add_node("generator", generator)
     graph.add_node("faithfulness", faithfulness)
     graph.add_node("general_generator", general_generator)
-    graph.add_node("disclosure_analyzer", disclosure_analyzer)
+    graph.add_node("metric_extractor", metric_extractor)
+    graph.add_node("finalize_extraction", finalize_extraction)
+    graph.add_node("live_tools", live_tools)
 
     # Set entry point
     graph.set_entry_point("moderator")
@@ -157,12 +190,21 @@ def build_graph() -> CompiledStateGraph:
     # Router → Retriever (always — every strategy needs documents)
     graph.add_edge("adaptive_router", "retriever")
 
-    # Retriever → (disclosure_analyzer) | (grader)
+    # Retriever → (metric_extractor) | (live_tools) | (grader)
     graph.add_conditional_edges(
         "retriever",
         route_after_retrieval,
-        {"disclosure_analyzer": "disclosure_analyzer", "grader": "grader"},
+        {
+            "metric_extractor": "metric_extractor",
+            "live_tools": "live_tools",
+            "grader": "grader",
+        },
     )
+
+    # Live tools (parallel market + news) → generator, skipping the grader.
+    # The node has already promoted retrieved_docs to relevant_docs so the
+    # generator sees both the document context and the live data.
+    graph.add_edge("live_tools", "generator")
 
     # Grader → (retry → rewriter) | (generate → generator) | (corpus_miss → general_generator)
     graph.add_conditional_edges(
@@ -175,8 +217,13 @@ def build_graph() -> CompiledStateGraph:
         },
     )
 
-    # Generator → Faithfulness audit → (ok → END) | (unsupported → general_generator)
-    graph.add_edge("generator", "faithfulness")
+    # Generator → (audit → faithfulness) | (skip_audit → END for hybrid_live)
+    # Faithfulness audit → (ok → END) | (unsupported → general_generator)
+    graph.add_conditional_edges(
+        "generator",
+        route_after_generator,
+        {"audit": "faithfulness", "skip_audit": END},
+    )
     graph.add_conditional_edges(
         "faithfulness",
         route_after_faithfulness,
@@ -185,16 +232,24 @@ def build_graph() -> CompiledStateGraph:
 
     graph.add_edge("general_generator", END)
 
-    # Disclosure Analyzer → END
-    graph.add_edge("disclosure_analyzer", END)
+    # Metric Extractor → finalize_extraction → END.
+    # The pause happens BEFORE finalize_extraction so the reviewer can
+    # verify, edit, or skip the extracted figures. After they respond, the
+    # API writes their verdict (verification_status + possibly edited
+    # extracted_metrics) into state and resumes. finalize_extraction then
+    # re-renders `generation` from the post-edit state.
+    graph.add_edge("metric_extractor", "finalize_extraction")
+    graph.add_edge("finalize_extraction", END)
 
-    # Compile with checkpointer + HITL interrupt before disclosure_analyzer.
+    # Compile with checkpointer + HITL interrupt BEFORE finalize_extraction.
     # - MemorySaver persists state between invocations, enabling pause/resume.
-    # - interrupt_before=["disclosure_analyzer"] pauses BEFORE the node runs so
-    #   a human reviewer can approve or reject the query via the frontend.
+    # - interrupt_before=["finalize_extraction"] pauses after metric_extractor
+    #   has written its extracted_metrics + generation to state. snapshot.next
+    #   contains ("finalize_extraction",) — a real node, so the API can
+    #   unambiguously detect the pause.
     return graph.compile(
         checkpointer=MemorySaver(),
-        interrupt_before=["disclosure_analyzer"],
+        interrupt_before=["finalize_extraction"],
     )
 
 

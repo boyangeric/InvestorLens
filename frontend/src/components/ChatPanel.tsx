@@ -6,8 +6,10 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-import type { ChatMessage } from "../hooks/useWebSocket";
+import type { ChatMessage, VerificationStatus } from "../hooks/useWebSocket";
 
 type Props = {
   messages: ChatMessage[];
@@ -18,8 +20,8 @@ type Props = {
 
 const SUGGESTIONS = [
   "What was the underlying profit before tax?",
-  "Compare disclosed risks across the indexed reports",
-  "Extract all financial metrics from the latest filing",
+  "Extract revenue, underlying profit, and EPS for Qantas HY26",
+  "Compare domestic and international segment performance",
 ];
 
 export function ChatPanel({ messages, isThinking, onSend, disabled }: Props) {
@@ -109,9 +111,96 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             : "border border-slate-200/70 bg-white text-slate-900 shadow-sm"
         }`}
       >
-        <div className="whitespace-pre-wrap break-words leading-relaxed">
-          {message.content}
-        </div>
+        {!isUser && <VerificationBadge status={message.verification_status} />}
+        {isUser ? (
+          <div className="whitespace-pre-wrap break-words leading-relaxed">
+            {message.content}
+          </div>
+        ) : (
+          <div className="break-words leading-relaxed">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                h1: ({ children }) => (
+                  <h1 className="mb-2 mt-1 text-[14px] font-semibold text-slate-900">
+                    {children}
+                  </h1>
+                ),
+                h2: ({ children }) => (
+                  <h2 className="mb-2 mt-3 text-[13px] font-semibold text-slate-900 first:mt-0">
+                    {children}
+                  </h2>
+                ),
+                h3: ({ children }) => (
+                  <h3 className="mb-1.5 mt-2.5 text-[12px] font-semibold text-slate-900">
+                    {children}
+                  </h3>
+                ),
+                p: ({ children }) => (
+                  <p className="my-1.5 first:mt-0 last:mb-0">{children}</p>
+                ),
+                ul: ({ children }) => (
+                  <ul className="my-1.5 list-disc space-y-0.5 pl-5">
+                    {children}
+                  </ul>
+                ),
+                ol: ({ children }) => (
+                  <ol className="my-1.5 list-decimal space-y-0.5 pl-5">
+                    {children}
+                  </ol>
+                ),
+                strong: ({ children }) => (
+                  <strong className="font-semibold text-slate-900">
+                    {children}
+                  </strong>
+                ),
+                em: ({ children }) => (
+                  <em className="italic text-slate-700">{children}</em>
+                ),
+                code: ({ children }) => (
+                  <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] text-slate-800">
+                    {children}
+                  </code>
+                ),
+                a: ({ href, children }) => (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-indigo-600 underline underline-offset-2 hover:text-indigo-700"
+                  >
+                    {children}
+                  </a>
+                ),
+                table: ({ children }) => (
+                  <div className="my-2.5 overflow-x-auto rounded-lg border border-slate-200">
+                    <table className="w-full text-[12px]">{children}</table>
+                  </div>
+                ),
+                thead: ({ children }) => (
+                  <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
+                    {children}
+                  </thead>
+                ),
+                tbody: ({ children }) => (
+                  <tbody className="divide-y divide-slate-100">{children}</tbody>
+                ),
+                tr: ({ children }) => <tr>{children}</tr>,
+                th: ({ children }) => (
+                  <th className="px-2.5 py-1.5 font-semibold">{children}</th>
+                ),
+                td: ({ children }) => (
+                  <td className="px-2.5 py-1.5 align-top tabular-nums">
+                    {children}
+                  </td>
+                ),
+                hr: () => <hr className="my-3 border-slate-200" />,
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          </div>
+        )}
         {!isUser && message.grounded === false ? (
           <div className="mt-2.5 flex items-center gap-2 border-t border-slate-100 pt-2 text-[10px] text-slate-500">
             <span className="inline-flex h-1.5 w-1.5 rounded-full bg-slate-400" />
@@ -134,6 +223,46 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           )
         )}
       </div>
+    </div>
+  );
+}
+
+function VerificationBadge({
+  status,
+}: {
+  status: VerificationStatus | undefined;
+}) {
+  if (!status || status === "rejected") return null;
+
+  const config: Record<
+    Exclude<VerificationStatus, "" | "rejected">,
+    { label: string; tone: string; icon: string }
+  > = {
+    verified: {
+      label: "Human-verified",
+      tone: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      icon: "✓",
+    },
+    edited: {
+      label: "Human-corrected",
+      tone: "bg-indigo-50 text-indigo-700 border-indigo-200",
+      icon: "✎",
+    },
+    skipped: {
+      label: "Unverified extraction",
+      tone: "bg-amber-50 text-amber-800 border-amber-200",
+      icon: "⚠",
+    },
+  };
+  const meta = config[status as Exclude<VerificationStatus, "" | "rejected">];
+  if (!meta) return null;
+
+  return (
+    <div
+      className={`mb-2 inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${meta.tone}`}
+    >
+      <span aria-hidden>{meta.icon}</span>
+      <span>{meta.label}</span>
     </div>
   );
 }

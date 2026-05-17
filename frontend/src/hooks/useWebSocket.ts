@@ -34,19 +34,32 @@ export type TokenUsage = {
   by_model: Record<string, { tokens_in: number; tokens_out: number; cost_usd: number; calls: number }>;
 };
 
+export type ExtractedMetric = {
+  name: string;
+  value: string;
+  period: string;
+  source: string;
+  page: number;
+};
+
+export type VerificationStatus = "" | "verified" | "edited" | "skipped" | "rejected";
+
 export type ServerMessage =
   | { type: "node_end"; node: string; trace: TraceEntry }
   | {
       type: "review_required";
-      next_node: string;
+      paused_after: string;
       query: string;
       reasoning: string;
+      extracted_metrics: ExtractedMetric[];
+      preview: string;
     }
   | {
       type: "final_answer";
       answer: string;
       confidence: number;
       grounded?: boolean;
+      verification_status?: VerificationStatus;
       trace: TraceEntry[];
       token_usage?: TokenUsage;
     }
@@ -59,13 +72,16 @@ export type ChatMessage = {
   content: string;
   confidence?: number;
   grounded?: boolean;
+  verification_status?: VerificationStatus;
   trace?: TraceEntry[];
 };
 
 export type ReviewState = {
   query: string;
   reasoning: string;
-  next_node: string;
+  paused_after: string;
+  extracted_metrics: ExtractedMetric[];
+  preview: string;
 } | null;
 
 export type ConnectionStatus = "connecting" | "open" | "closed";
@@ -113,12 +129,15 @@ export function useWebSocket(sessionId: string) {
           break;
 
         case "review_required":
-          // Graph paused at interrupt_before — surface the approval modal
+          // Graph paused at interrupt_after(metric_extractor) — the figures
+          // are already in state, so surface them for the reviewer to verify.
           setIsThinking(false);
           setReview({
             query: msg.query,
             reasoning: msg.reasoning,
-            next_node: msg.next_node,
+            paused_after: msg.paused_after,
+            extracted_metrics: msg.extracted_metrics ?? [],
+            preview: msg.preview ?? "",
           });
           break;
 
@@ -133,6 +152,7 @@ export function useWebSocket(sessionId: string) {
               content: msg.answer,
               confidence: msg.confidence,
               grounded: msg.grounded ?? true,
+              verification_status: msg.verification_status ?? "",
               trace: msg.trace,
             },
           ]);
@@ -182,6 +202,21 @@ export function useWebSocket(sessionId: string) {
     send({ type: "approve" });
   }, [send]);
 
+  const approveEdits = useCallback(
+    (metrics: ExtractedMetric[]) => {
+      setIsThinking(true);
+      setReview(null);
+      send({ type: "approve_edits", metrics });
+    },
+    [send],
+  );
+
+  const skip = useCallback(() => {
+    setIsThinking(true);
+    setReview(null);
+    send({ type: "skip" });
+  }, [send]);
+
   const reject = useCallback(
     (reason: string) => {
       setReview(null);
@@ -199,6 +234,8 @@ export function useWebSocket(sessionId: string) {
     error,
     sendQuery,
     approve,
+    approveEdits,
+    skip,
     reject,
   };
 }

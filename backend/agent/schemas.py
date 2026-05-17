@@ -51,7 +51,8 @@ RouterStrategy = Literal[
     "keyword_search",
     "direct_extract",
     "compare",
-    "analyze_disclosures",
+    "extract_metrics",
+    "hybrid_live",
 ]
 
 
@@ -64,9 +65,13 @@ class RouterResponse(_Strict):
 # Grader
 # ---------------------------------------------------------------------------
 class GraderResponse(_Strict):
-    # 1 = relevant, 0 = not relevant. Literal[0, 1] becomes integer + enum
-    # in the JSON schema, so the API cannot return e.g. "yes" or 2.
-    relevant: Literal[0, 1]
+    # Three-way verdict instead of a forced binary. "uncertain" gives the
+    # model a syntactic way to say "I can't confidently decide" — without it,
+    # Structured Outputs forces a coin-flipped yes/no and the trace looks
+    # confident even when the model wasn't. The grader node treats
+    # "uncertain" as "do not ground on this chunk" (same effect as "no") but
+    # counts it separately in the trace so the signal isn't lost.
+    relevant: Literal["yes", "no", "uncertain"]
     reason: str
 
 
@@ -101,20 +106,19 @@ class FaithfulnessResponse(_Strict):
 
 
 # ---------------------------------------------------------------------------
-# Disclosure Analyzer
+# Metric Extractor (HITL gate — the human verifies these numbers before they
+# propagate into a comparison or grounded answer)
 # ---------------------------------------------------------------------------
-RiskSeverity = Literal["high", "medium", "low"]
+class ExtractedMetric(_Strict):
+    name: str = Field(description='Standardised metric name, e.g. "revenue", "net_profit_margin"')
+    value: str = Field(description='Exact figure as it appears in the document, e.g. "$52.3 billion", "23.4%"')
+    period: str = Field(description='Reporting period the figure applies to, e.g. "FY2024", "HY26"')
+    source: str = Field(description="Source filename")
+    page: int = Field(description="1-based page number where the figure was found")
 
 
-class DisclosedRisk(_Strict):
-    title: str
-    severity: RiskSeverity
-    summary: str
-    passage: str
-    source: str
-    page: int = Field(description="1-based page number in the source document")
-
-
-class DisclosureAnalyzerResponse(_Strict):
-    risks: list[DisclosedRisk]
-    overall_risk_assessment: str
+class MetricExtractorResponse(_Strict):
+    document: str
+    period: str
+    metrics: list[ExtractedMetric]
+    key_highlights: list[str]

@@ -38,6 +38,8 @@ export default function App() {
     error,
     sendQuery,
     approve,
+    approveEdits,
+    skip,
     reject,
   } = useWebSocket(sessionId);
 
@@ -79,6 +81,8 @@ export default function App() {
         <ApprovalModal
           review={review}
           onApprove={approve}
+          onApproveEdits={approveEdits}
+          onSkip={skip}
           onReject={reject}
         />
       )}

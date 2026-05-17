@@ -6,10 +6,12 @@ as a tool source. Each tool wraps a piece of the agent so callers can invoke
 specific capabilities directly without going through the full graph.
 
 Tools exposed:
-  - search_docs:           semantic search over the document corpus
-  - extract_financials:    pull structured financial metrics from a document
-  - compare_docs:          cross-document comparison
-  - analyze_disclosures:   extract disclosed material risks (was "flag_risks")
+  - search_docs:        semantic search over the document corpus
+  - extract_financials: pull structured numeric metrics from a document
+                        (the same extraction the agent's HITL gate sits on top of)
+  - compare_docs:       cross-document comparison
+  - get_market_quote:   live price snapshot via yfinance (no API key)
+  - search_news:        recent financial news via Tavily (needs TAVILY_API_KEY)
 
 Run via stdio (the standard transport for Claude Desktop integration):
 
@@ -29,14 +31,14 @@ Add to Claude Desktop's `claude_desktop_config.json`:
 """
 
 import logging
-from typing import cast
 
 from mcp.server.fastmcp import FastMCP
 
-from backend.agent.nodes.disclosure_analyzer import disclosure_analyzer
 from backend.agent.nodes.retriever import _compare, _direct_extract, _semantic_search
-from backend.agent.state import AgentState
-from backend.agent.utils import call_llm, load_prompt
+from backend.agent.schemas import MetricExtractorResponse
+from backend.agent.tools.market import get_market_quote as _get_market_quote
+from backend.agent.tools.news import search_news as _search_news
+from backend.agent.utils import call_llm_structured, load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +80,17 @@ def search_docs(query: str, top_k: int = 8) -> dict:
 @mcp.tool()
 def extract_financials(query: str, top_k: int = 20) -> dict:
     """
-    Extract structured financial metrics from ingested documents.
+    Extract structured numeric financial metrics from ingested documents.
 
     Use this when the caller wants specific figures (revenue, profit, margins,
-    EPS, etc.) extracted as data, not summarised as prose. Returns a JSON
-    object with named metrics and their source pages.
+    EPS, ratios, etc.) extracted as data, not summarised as prose. Returns a
+    list of named metrics with exact figures, reporting periods, and source
+    pages — the same shape the agent's HITL gate verifies.
+
+    Note: in the full agent (via WebSocket), this extraction is HITL-gated.
+    When invoked directly via MCP, it runs without the human review gate —
+    the assumption is that an MCP client (e.g. Claude Desktop) is already a
+    reviewed, intentional invocation.
 
     Args:
         query: What to extract, e.g. "all financial metrics for the half year"
@@ -91,8 +99,8 @@ def extract_financials(query: str, top_k: int = 20) -> dict:
                benefits from broader coverage).
 
     Returns:
-        A dict with `metrics` (list of {name, value, unit, source, page}) and
-        the raw extractor reasoning.
+        A dict with `metrics` (list of {name, value, period, source, page}),
+        `document`, `period`, and `key_highlights`.
     """
     logger.info("MCP extract_financials: %s", query[:80])
     chunks = _direct_extract(query, top_k=top_k)
@@ -100,20 +108,26 @@ def extract_financials(query: str, top_k: int = 20) -> dict:
     if not chunks:
         return {"query": query, "metrics": [], "note": "No relevant chunks found."}
 
-    context = "\n\n---\n\n".join(
-        f"[{c['source']}, Page {c['page']}]\n{c['content']}" for c in chunks
-    )
+    source = chunks[0].get("source", "unknown")
+    content = "\n\n".join(f"[Page {c['page']}]\n{c['content']}" for c in chunks)
 
     prompt = load_prompt("extractor_v1")
-    result = call_llm(prompt, {"query": query, "context": context})
-    response = result["response"]
+    result = call_llm_structured(
+        prompt,
+        {"source": source, "content": content},
+        MetricExtractorResponse,
+    )
+    response: MetricExtractorResponse = result["response"]
 
     return {
         "query": query,
-        "metrics": response.get("metrics", []),
-        "reasoning": response.get("reasoning", ""),
+        "document": response.document,
+        "period": response.period,
+        "metrics": [m.model_dump() for m in response.metrics],
+        "key_highlights": response.key_highlights,
         "tokens_in": result["tokens_in"],
         "tokens_out": result["tokens_out"],
+        "cost_usd": result["cost_usd"],
     }
 
 
@@ -154,44 +168,66 @@ def compare_docs(query: str, top_k: int = 6) -> dict:
 
 
 @mcp.tool()
-def analyze_disclosures(query: str = "key disclosed risks", top_k: int = 8) -> dict:
+def get_market_quote(ticker: str) -> dict:
     """
-    Extract material risks the company has disclosed in its filings.
+    Fetch a current live quote (price, day change, market cap, 52-week range)
+    for a single security via yfinance.
 
-    Returns a structured list of disclosed risks with severity (high/medium/low),
-    a plain-language summary, and the exact passage from the document. Use this
-    when the caller asks about disclosed risks, warnings, regulatory issues,
-    going concern, or material uncertainties.
-
-    Note: in the full agent (via WebSocket), this tool is HITL-gated. When
-    invoked directly via MCP, it runs without the human review gate — the
-    assumption is that an MCP client (e.g., Claude Desktop) is already a
-    reviewed, intentional invocation.
+    Use the .AX suffix for ASX-listed Australian companies — `QAN.AX` for
+    Qantas, `CBA.AX` for Commonwealth Bank, `BHP.AX` for BHP, `WBC.AX` for
+    Westpac. US tickers use no suffix (`AAPL`, `MSFT`).
 
     Args:
-        query: Topic or scope for the disclosure analysis.
-        top_k: Number of chunks to feed into the analyser (default 8).
+        ticker: Ticker symbol with exchange suffix.
 
     Returns:
-        Structured disclosures with severity and source citations.
+        A dict with the quote (ticker, name, price, currency, day change %,
+        market cap, 52w low/high, as-of timestamp) or `{"error": "..."}` if the
+        ticker could not be resolved.
     """
-    logger.info("MCP analyze_disclosures: %s", query[:80])
-    chunks = _semantic_search(query, top_k=top_k)
+    logger.info("MCP get_market_quote: %s", ticker)
+    quote = _get_market_quote(ticker)
+    if quote is None:
+        return {"error": f"No live data for ticker {ticker!r}"}
+    return quote.model_dump()
 
-    # Build a minimal AgentState-like dict — the node only reads two keys.
-    fake_state = cast(AgentState, {
-        "query": query,
-        "relevant_docs": chunks,
-        "node_trace": [],
-    })
-    result = disclosure_analyzer(fake_state)
 
-    return {
+@mcp.tool()
+def search_news(query: str, days: int = 30, max_results: int = 5) -> dict:
+    """
+    Search recent financial news via Tavily. Returns title, URL, snippet, and
+    publication date for the top matching articles.
+
+    Use this when the caller wants context on what has happened recently — ASX
+    announcements, broker upgrades, profit warnings, regulatory actions — that
+    a static document corpus cannot answer.
+
+    Requires `TAVILY_API_KEY` in the environment. Returns an empty list (with a
+    `note`) rather than raising when the key is missing or the upstream call
+    fails, so callers can degrade gracefully.
+
+    Args:
+        query: Natural-language news query, e.g. "Qantas profit downgrade".
+        days: Lookback window in days (default 30).
+        max_results: Number of articles to return (default 5).
+
+    Returns:
+        A dict with `articles` (list of {title, url, snippet, published_at,
+        source}) and `count`.
+    """
+    logger.info("MCP search_news: %s (days=%d)", query[:80], days)
+    articles = _search_news(query, days=days, max_results=max_results)
+    out = {
         "query": query,
-        "report": result.get("generation", ""),
-        "confidence": result.get("confidence", 0.0),
-        "trace": result.get("node_trace", []),
+        "articles": [a.model_dump() for a in articles],
+        "count": len(articles),
     }
+    if not articles:
+        out["note"] = (
+            "No articles returned — either TAVILY_API_KEY is unset or the "
+            "search produced no recent matches."
+        )
+    return out
 
 
 def main() -> None:

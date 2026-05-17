@@ -22,11 +22,11 @@ LangGraph StateGraph (single agent, multiple tools)
 4. **Retriever** — Executes the chosen strategy against Qdrant
 5. **Grader** — Scores chunk relevance; loops back to rewriter if insufficient (max 2 retries)
 6. **Generator** — Produces grounded answer with citations and confidence score
-7. **Risk Flagger** — Identifies risk disclosures with human-in-the-loop approval
+7. **Metric Extractor** — Pulls structured financial figures; pauses for human verification (HITL) before they propagate downstream
 
 ## Multi-Model Strategy
 
 | Node | Model | Rationale |
 |------|-------|-----------|
 | Moderator, Rewriter, Router, Grader | GPT-4o-mini | Simple classification tasks, cost-efficient |
-| Generator, Extractor, Compare, Risk Flagger | GPT-4o | Quality-critical outputs requiring accuracy |
+| Generator, Extractor, Compare, Metric Extractor | GPT-4o | Quality-critical outputs requiring accuracy |

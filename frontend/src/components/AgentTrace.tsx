@@ -2,7 +2,7 @@
  * AgentTrace — live visualization of the agent's reasoning path.
  *
  * Each entry in `liveTrace` is one node firing in the LangGraph (moderator,
- * rewriter, adaptive_router, retriever, grader, generator, disclosure_analyzer).
+ * rewriter, adaptive_router, retriever, grader, generator, metric_extractor).
  * Order is the order of execution — including any retry loops, which the
  * grader→rewriter cycle naturally shows as the same node appearing twice.
  *
@@ -61,10 +61,15 @@ const NODE_META: Record<
     accent: "bg-slate-400",
     tone: "text-slate-700",
   },
-  disclosure_analyzer: {
-    label: "Disclosure Analyzer",
+  metric_extractor: {
+    label: "Metric Extractor",
     accent: "bg-rose-500",
     tone: "text-rose-700",
+  },
+  live_tools: {
+    label: "Live Tools",
+    accent: "bg-sky-500",
+    tone: "text-sky-700",
   },
 };
 
@@ -247,6 +252,23 @@ function TraceDetails({ entry }: { entry: TraceEntry }) {
   }
   if (entry.node === "general_generator") {
     details.push({ label: "source", value: "general knowledge" });
+  }
+  if (
+    entry.node === "metric_extractor" &&
+    typeof entry.metrics_extracted === "number"
+  ) {
+    details.push({
+      label: "metrics",
+      value: String(entry.metrics_extracted),
+    });
+  }
+  if (entry.node === "live_tools") {
+    if (typeof entry.market_count === "number") {
+      details.push({ label: "quotes", value: String(entry.market_count) });
+    }
+    if (typeof entry.news_count === "number") {
+      details.push({ label: "articles", value: String(entry.news_count) });
+    }
   }
   if (entry.node === "faithfulness" && typeof entry.faithful === "boolean") {
     details.push({

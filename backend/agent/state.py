@@ -26,6 +26,19 @@ class AgentState(TypedDict):
     grounded: bool                  # True if answer is grounded in retrieved docs; False if from general knowledge
     faithful: bool                  # True if grounded claims are actually supported by cited chunks (post-gen audit)
 
+    # --- Extraction (HITL gate) ---
+    extracted_metrics: list[dict]      # Numeric metrics pulled by metric_extractor; surfaced to the human reviewer
+                                       # via the approval modal before they propagate downstream
+    extracted_highlights: list[str]    # Reviewer-facing notes from metric_extractor (e.g. unusual movements)
+    verification_status: str           # "" before HITL | "verified" | "edited" | "skipped"
+                                       # Set by the API when the reviewer responds to the modal; finalize_extraction
+                                       # re-renders `generation` to reflect any edits, and the frontend renders a
+                                       # provenance badge based on this value.
+
+    # --- Live tool calling (hybrid_live strategy) ---
+    live_quotes: list[dict]            # MarketQuote dicts fetched from yfinance via the live_tools node
+    live_news:   list[dict]            # NewsResult dicts fetched from Tavily via the live_tools node
+
     # --- Control flow ---
     retry_count: int                # Tracks grader→rewriter loop iterations (max 2)
 

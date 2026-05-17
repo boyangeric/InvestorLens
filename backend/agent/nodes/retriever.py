@@ -15,7 +15,6 @@ import time
 from dotenv import load_dotenv
 from openai import OpenAI
 from qdrant_client import QdrantClient
-from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 from backend.agent.state import AgentState
 from backend.agent.utils import embeddings_with_retry
@@ -35,6 +34,7 @@ TOP_K = {
     "keyword_search": 5,
     "direct_extract": 20,
     "compare": 6,
+    "hybrid_live": 5,  # fewer chunks since live data carries half the load
 }
 
 
@@ -71,9 +71,6 @@ def _semantic_search(query: str, top_k: int) -> list[dict]:
 def _keyword_search(query: str, top_k: int) -> list[dict]:
     """
     Keyword-aware search — uses embedding search but with a higher bar.
-
-    In a production system, you'd use BM25 or Qdrant's full-text index.
-    Here we use vector search with a score threshold as a pragmatic approach.
     """
     results = _semantic_search(query, top_k=top_k * 2)
 
@@ -130,6 +127,9 @@ STRATEGY_FN = {
     "keyword_search": _keyword_search,
     "direct_extract": _direct_extract,
     "compare": _compare,
+    # hybrid_live uses semantic search for the document side; the live_tools
+    # node downstream adds the live market + news context in parallel.
+    "hybrid_live": _semantic_search,
 }
 
 

@@ -40,6 +40,7 @@ def grader(state: AgentState) -> dict:
     logger.info("Grader: scoring %d chunks (attempt %d)", len(retrieved_docs), retry_count + 1)
 
     relevant_docs = []
+    uncertain_count = 0
     total_tokens_in = 0
     total_tokens_out = 0
     total_duration_ms = 0
@@ -63,8 +64,12 @@ def grader(state: AgentState) -> dict:
         total_cost_usd += result["cost_usd"]
 
         response: GraderResponse = result["response"]
-        if response.relevant == 1:
+        if response.relevant == "yes":
             relevant_docs.append(doc)
+        elif response.relevant == "uncertain":
+            # Don't ground on an uncertain chunk — citation-hallucination risk.
+            # But surface the count in the trace so the signal doesn't vanish.
+            uncertain_count += 1
 
     # Decide whether we have enough relevant chunks
     enough = len(relevant_docs) >= MIN_RELEVANT
@@ -74,6 +79,8 @@ def grader(state: AgentState) -> dict:
         status = f"insufficient ({len(relevant_docs)}/{MIN_RELEVANT}), retry {retry_count + 1}"
     else:
         status = f"{len(relevant_docs)}/{len(retrieved_docs)} relevant"
+    if uncertain_count:
+        status += f" ({uncertain_count} uncertain)"
 
     logger.info("Grader: %s", status)
 
@@ -87,6 +94,7 @@ def grader(state: AgentState) -> dict:
         "cost_usd": total_cost_usd,
         "chunks_graded": len(retrieved_docs),
         "chunks_relevant": len(relevant_docs),
+        "chunks_uncertain": uncertain_count,
     }
 
     node_trace = state.get("node_trace", []) + [trace_entry]

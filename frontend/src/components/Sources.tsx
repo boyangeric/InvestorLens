@@ -2,12 +2,19 @@
  * Sources — citations panel for the most recent agent answer.
  *
  * Pulls `sources` arrays out of trace entries (the generator writes them).
- * Dedupes by source+page so the same passage isn't shown twice.
+ * The generator's `sources` field is `list[str]` (see GeneratorResponse) —
+ * each entry is a citation string in one of these shapes:
+ *   - Document    → "filename.pdf, Page X"
+ *   - Market data → "yfinance, as_of YYYY-MM-DD"
+ *   - News        → "domain.com, published YYYY-MM-DD"
+ * We parse them into a tagged union so doc vs live can be styled differently.
  */
 
 import type { ChatMessage, TraceEntry } from "../hooks/useWebSocket";
 
-type Source = { source: string; page: number };
+type DocSource = { kind: "doc"; source: string; page: string };
+type LiveSource = { kind: "live"; source: string; meta: string };
+type CitationSource = DocSource | LiveSource;
 
 export function Sources({ messages }: { messages: ChatMessage[] }) {
   const lastAnswer = [...messages].reverse().find((m) => m.role === "assistant");
@@ -48,36 +55,7 @@ export function Sources({ messages }: { messages: ChatMessage[] }) {
         ) : (
           <ul className="space-y-1.5">
             {sources.map((s, i) => (
-              <li
-                key={i}
-                className="group flex items-center gap-2.5 rounded-lg border border-slate-200/70 bg-white px-2.5 py-2 transition-all hover:border-slate-300 hover:shadow-sm"
-              >
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50">
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.6"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="h-3.5 w-3.5 text-slate-500"
-                  >
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                    <polyline points="14 2 14 8 20 8" />
-                  </svg>
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div
-                    className="truncate text-[11.5px] font-medium text-slate-900"
-                    title={s.source}
-                  >
-                    {s.source}
-                  </div>
-                  <div className="font-mono text-[10px] tabular-nums text-slate-500">
-                    p.{s.page}
-                  </div>
-                </div>
-              </li>
+              <SourceRow key={i} source={s} />
             ))}
           </ul>
         )}
@@ -86,32 +64,127 @@ export function Sources({ messages }: { messages: ChatMessage[] }) {
   );
 }
 
-function extractSources(trace: TraceEntry[] | undefined): Source[] {
+function SourceRow({ source }: { source: CitationSource }) {
+  const isLive = source.kind === "live";
+  return (
+    <li className="group flex items-center gap-2.5 rounded-lg border border-slate-200/70 bg-white px-2.5 py-2 transition-all hover:border-slate-300 hover:shadow-sm">
+      <div
+        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${
+          isLive
+            ? "border-sky-200 bg-sky-50"
+            : "border-slate-200 bg-slate-50"
+        }`}
+      >
+        {isLive ? (
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-3.5 w-3.5 text-sky-600"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="2" y1="12" x2="22" y2="12" />
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+          </svg>
+        ) : (
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-3.5 w-3.5 text-slate-500"
+          >
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div
+          className="truncate text-[11.5px] font-medium text-slate-900"
+          title={source.source}
+        >
+          {source.source}
+        </div>
+        <div className="font-mono text-[10px] tabular-nums text-slate-500">
+          {source.kind === "doc" ? (source.page ? `p.${source.page}` : "—") : source.meta}
+        </div>
+      </div>
+      {isLive && (
+        <span className="shrink-0 rounded-md bg-sky-50 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-sky-700">
+          Live
+        </span>
+      )}
+    </li>
+  );
+}
+
+function parseCitation(raw: string): CitationSource | null {
+  if (typeof raw !== "string") return null;
+  // Strip any leading "[Source: " / "[Live: " prefix and trailing "]" the
+  // model may have left in — the documented format is bare, but be lenient.
+  const clean = raw
+    .trim()
+    .replace(/^\[?\s*(Source|Live)\s*:\s*/i, "")
+    .replace(/\]\s*$/, "")
+    .trim();
+  if (!clean) return null;
+
+  // Live data: "yfinance, as_of 2026-05-17" or "afr.com, published 2026-05-15"
+  const liveMatch = clean.match(/^(.+?),\s*(as_of|published)\s+(.+)$/i);
+  if (liveMatch) {
+    return {
+      kind: "live",
+      source: liveMatch[1].trim(),
+      meta: `${liveMatch[2].toLowerCase()} ${liveMatch[3].trim()}`,
+    };
+  }
+
+  // Document: "filename.pdf, Page 12" (page may be "1-14" range)
+  const docMatch = clean.match(/^(.+?),\s*Page\s+([\w-]+)\s*$/i);
+  if (docMatch) {
+    return { kind: "doc", source: docMatch[1].trim(), page: docMatch[2].trim() };
+  }
+
+  // Fallback — treat as a doc with no page number rather than dropping it.
+  return { kind: "doc", source: clean, page: "" };
+}
+
+function extractSources(trace: TraceEntry[] | undefined): CitationSource[] {
   if (!trace) return [];
 
-  const all: Source[] = [];
+  const all: CitationSource[] = [];
   for (const entry of trace) {
     const raw = entry.sources;
     if (!Array.isArray(raw)) continue;
     for (const s of raw) {
-      if (
-        s &&
-        typeof s === "object" &&
-        "source" in s &&
-        "page" in s &&
-        typeof (s as Source).source === "string"
-      ) {
-        all.push({
-          source: (s as Source).source,
-          page: Number((s as Source).page) || 0,
-        });
+      // Backend currently emits strings; tolerate legacy {source, page}
+      // objects so old checkpointed traces still render.
+      if (typeof s === "string") {
+        const parsed = parseCitation(s);
+        if (parsed) all.push(parsed);
+      } else if (s && typeof s === "object" && "source" in s) {
+        const obj = s as { source: unknown; page?: unknown };
+        if (typeof obj.source === "string") {
+          all.push({
+            kind: "doc",
+            source: obj.source,
+            page: obj.page != null ? String(obj.page) : "",
+          });
+        }
       }
     }
   }
 
   const seen = new Set<string>();
   return all.filter((s) => {
-    const key = `${s.source}::${s.page}`;
+    const key =
+      s.kind === "doc" ? `doc::${s.source}::${s.page}` : `live::${s.source}::${s.meta}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

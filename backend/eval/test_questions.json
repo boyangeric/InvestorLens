@@ -2,8 +2,8 @@
   "_schema_notes": [
     "Each question has expected behaviour for the relevant graph branches.",
     "Fields under `expected` are checked by metrics.py — missing fields are skipped.",
-    "Categories: factual | comparative | extraction | adversarial | out_of_scope",
-    "Strategy values: semantic_search | keyword_search | direct_extract | compare | analyze_disclosures",
+    "Categories: factual | comparative | extraction | adversarial | out_of_scope | hybrid_live",
+    "Strategy values: semantic_search | keyword_search | direct_extract | compare | extract_metrics | hybrid_live",
     "Run after ingesting the sample corpus (sample_docs/03061502.pdf — Qantas HY26 results)."
   ],
   "questions": [
@@ -147,6 +147,40 @@
         "moderator": "pass",
         "grounded": false,
         "fallback_node": "general_generator"
+      }
+    },
+
+    {
+      "id": "hybrid_live_001",
+      "category": "hybrid_live",
+      "query": "What is Qantas trading at today compared to the period covered in the report?",
+      "expected": {
+        "moderator": "pass",
+        "strategy_in": ["hybrid_live"],
+        "grounded": true,
+        "min_citations": 1
+      }
+    },
+    {
+      "id": "hybrid_live_002",
+      "category": "hybrid_live",
+      "query": "Has anything material happened to Qantas in the news since the half-year results?",
+      "expected": {
+        "moderator": "pass",
+        "strategy_in": ["hybrid_live"],
+        "grounded": true,
+        "min_citations": 1
+      }
+    },
+    {
+      "id": "hybrid_live_003",
+      "category": "hybrid_live",
+      "query": "Give me the current share price, market cap, and one-line news headline for Qantas.",
+      "expected": {
+        "moderator": "pass",
+        "strategy_in": ["hybrid_live"],
+        "grounded": true,
+        "min_citations": 1
       }
     }
   ]
