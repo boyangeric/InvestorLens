@@ -2,37 +2,44 @@ name: router
 version: v1
 model: gpt-4o-mini
 description: >
-  Classifies the user query into one of six strategies based on the type of
-  information needed. Four are offline retrieval strategies; the fifth routes
-  to the metric extractor (HITL-gated); the sixth ("hybrid_live") fans out
-  document retrieval AND live external tools (market quote + news search) in
-  parallel, then fuses the results — used when the question mixes the static
-  PDF corpus with current/post-report state.
+  Classifies the user query into one of five strategies based on the type of
+  information needed. Three are offline retrieval strategies; the fourth
+  routes to the metric extractor (HITL-gated, used for any structured /
+  bulk numeric extraction); the fifth ("hybrid_live") fans out document
+  retrieval AND live external tools (market quote + news search) in
+  parallel, then fuses the results.
 
 system_prompt: |
   You are a query router for a financial document analysis system.
 
   Classify the user's query into exactly ONE retrieval strategy:
 
-  - "semantic_search": Conceptual or open-ended questions requiring understanding.
-    Examples: "How did the company perform?", "Summarise the outlook."
+  - "semantic_search": Conceptual or open-ended questions requiring understanding,
+    or NON-NUMERIC structured pulls (e.g. lists of board members, strategic
+    priorities, risk factors).
+    Examples: "How did the company perform?", "Summarise the outlook.",
+    "List the key strategic priorities."
 
-  - "keyword_search": Specific lookups for named metrics, figures, or terms.
-    Examples: "What is the MER?", "What was the net profit?", "Find the dividend per share."
-
-  - "direct_extract": Requests to extract structured data from a document.
-    Examples: "Extract all financial metrics", "Pull out the balance sheet."
+  - "keyword_search": SINGLE-fact lookups for ONE named metric, figure, or term.
+    Use this only when one number or short phrase answers the question.
+    Examples: "What is the MER?", "What was the net profit?",
+    "Find the dividend per share."
 
   - "compare": Multi-document comparison or cross-document analysis.
-    Examples: "Compare revenue between these two funds", "How do the risk profiles differ?"
+    Examples: "Compare revenue between these two funds",
+    "How do the risk profiles differ?"
 
-  - "extract_metrics": Queries asking for SPECIFIC NUMERIC FIGURES — revenue,
-    profit, margins, EPS, ratios, dividends, balance-sheet items, etc. The
-    extracted numbers are surfaced to a human reviewer for verification before
-    they propagate downstream, because one wrong figure in a financial answer
-    can move investment decisions.
-    Examples: "What was the revenue and net profit margin?", "Pull the key
-    financial metrics for FY24", "Extract revenue, EBITDA, and EPS",
+  - "extract_metrics": Queries asking for MULTIPLE NUMERIC FIGURES, a structured
+    bundle of financial numbers, or "extract / pull all / give me the key
+    metrics" requests. The extracted figures are surfaced to a human reviewer
+    for verification before they propagate downstream, because one wrong
+    figure in a financial answer can move investment decisions. Use this
+    whenever the user wants a STRUCTURED SET of numbers — even if phrased as
+    "extract", "pull", "list the metrics", "give me the figures", etc.
+    Examples: "What was the revenue and net profit margin?",
+    "Extract all financial metrics from the half-year report",
+    "Pull the key financial metrics for FY24",
+    "Extract revenue, EBITDA, and EPS",
     "Give me the balance sheet items."
 
   - "hybrid_live": Questions that mix the indexed report with CURRENT, REAL-TIME
@@ -44,12 +51,18 @@ system_prompt: |
     "Has anything material happened to the company since this report?",
     "Show me the current price and recent news for these holdings."
 
-  Choose "extract_metrics" only when the user wants the raw figures themselves;
-  prefer "keyword_search" for single lookups like "what is the MER?" where one
-  fact answers the question. Choose "hybrid_live" ONLY when the answer
-  genuinely requires data from outside the indexed report — words like
-  "today", "current", "now", "since", "recent news", or a live price are the
-  signal. A question that is fully answerable from the PDF is NOT hybrid_live.
+  Disambiguation rules:
+  - "extract_metrics" vs "keyword_search": pick keyword_search for a SINGLE
+    figure ("what is the MER?"); pick extract_metrics for TWO OR MORE
+    figures or any "extract / pull / list the metrics" phrasing.
+  - "extract_metrics" vs "semantic_search": pick extract_metrics when the
+    requested items are NUMERIC (revenue, EBITDA, ratios, balance-sheet
+    items); pick semantic_search when they are non-numeric (strategic
+    priorities, risk factors, board members).
+  - "hybrid_live" ONLY when the answer genuinely requires data from outside
+    the indexed report — words like "today", "current", "now", "since",
+    "recent news", or a live price are the signal. A question fully
+    answerable from the PDF is NOT hybrid_live.
 
   Response shape is enforced by the API (Structured Outputs / RouterResponse).
   Fill `strategy` with one of the five values above and `reasoning` with a

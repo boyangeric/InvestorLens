@@ -3,7 +3,7 @@
     "Each question has expected behaviour for the relevant graph branches.",
     "Fields under `expected` are checked by metrics.py — missing fields are skipped.",
     "Categories: factual | comparative | extraction | adversarial | out_of_scope | hybrid_live",
-    "Strategy values: semantic_search | keyword_search | direct_extract | compare | extract_metrics | hybrid_live",
+    "Strategy values: semantic_search | keyword_search | compare | extract_metrics | hybrid_live",
     "Run after ingesting the sample corpus (sample_docs/03061502.pdf — Qantas HY26 results)."
   ],
   "questions": [
@@ -75,7 +75,7 @@
       "query": "Extract all financial metrics reported in the half year results",
       "expected": {
         "moderator": "pass",
-        "strategy_in": ["direct_extract", "semantic_search"],
+        "strategy_in": ["extract_metrics"],
         "grounded": true,
         "min_citations": 1,
         "faithful": true
@@ -87,7 +87,7 @@
       "query": "List the key strategic priorities mentioned in the document",
       "expected": {
         "moderator": "pass",
-        "strategy_in": ["direct_extract", "semantic_search"],
+        "strategy_in": ["semantic_search"],
         "grounded": true,
         "min_citations": 1,
         "faithful": true

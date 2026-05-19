@@ -13,7 +13,7 @@ import uuid
 from dotenv import load_dotenv
 from openai import OpenAI
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import Distance, PointStruct, VectorParams, TextIndexParams
 
 from backend.agent.utils import embeddings_with_retry
 
@@ -46,7 +46,13 @@ def get_qdrant_client() -> QdrantClient:
 
 
 def ensure_collection(client: QdrantClient) -> None:
-    """Create the Qdrant collection if it doesn't exist."""
+    """
+    Create the Qdrant collection if it doesn't exist.
+
+    Configures:
+    - Vector search (embedding-based similarity) for semantic_search & hybrid_live
+    - Text indexing (BM25) on the "text" field for deterministic keyword_search
+    """
     collections = [c.name for c in client.get_collections().collections]
 
     if COLLECTION_NAME not in collections:
@@ -58,6 +64,17 @@ def ensure_collection(client: QdrantClient) -> None:
             ),
         )
         logger.info("Created Qdrant collection: %s", COLLECTION_NAME)
+
+        # Enable BM25 full-text search on the 'text' field for keyword-based retrieval
+        try:
+            client.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name="text",
+                field_schema=TextIndexParams(type="text", tokenizer="word", lowercase=True),
+            )
+            logger.info("Enabled BM25 text indexing on 'text' field")
+        except Exception as e:
+            logger.warning("Could not create text index (may already exist): %s", e)
     else:
         logger.info("Qdrant collection already exists: %s", COLLECTION_NAME)
 

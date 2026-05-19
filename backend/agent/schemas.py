@@ -56,7 +56,6 @@ class RewriterResponse(_Strict):
 RouterStrategy = Literal[
     "semantic_search",
     "keyword_search",
-    "direct_extract",
     "compare",
     "extract_metrics",
     "hybrid_live",

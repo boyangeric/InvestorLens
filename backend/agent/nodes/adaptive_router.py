@@ -2,10 +2,14 @@
 Adaptive Router Node — classifies queries into retrieval strategies.
 
 Uses GPT-4o-mini to pick the optimal retrieval approach per query:
-  - semantic_search: conceptual questions ("what are the key risks?")
-  - keyword_search: specific lookups ("what is the MER?")
-  - direct_extract: structured extraction ("extract all financial metrics")
+  - semantic_search: conceptual questions ("what are the key risks?") or
+    non-numeric structured pulls ("list the strategic priorities")
+  - keyword_search: single-fact lookups ("what is the MER?")
   - compare: multi-document comparison ("compare these two funds")
+  - extract_metrics: bulk numeric extraction ("extract all financial
+    metrics") — routes to the HITL-gated metric extractor downstream
+  - hybrid_live: report + current state ("price today vs HY26 close") —
+    fans out to live market quote + news tools in parallel
 
 This is what makes the RAG system "adaptive" — different queries need
 fundamentally different retrieval approaches.

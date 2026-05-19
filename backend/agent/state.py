@@ -15,7 +15,7 @@ class AgentState(TypedDict):
     chat_history: list[dict]        # Last N messages for context: [{role, content}]
 
     # --- Retrieval ---
-    retrieval_strategy: str         # "semantic_search" | "keyword_search" | "direct_extract" | "compare"
+    retrieval_strategy: str         # "semantic_search" | "keyword_search" | "compare" | "extract_metrics" | "hybrid_live"
     strategy_reasoning: str         # Router's explanation for choosing this strategy
     retrieved_docs: list[dict]      # Raw chunks from retriever: [{content, metadata, score}]
     relevant_docs: list[dict]       # Chunks that passed the grader filter

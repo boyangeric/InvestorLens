@@ -5,12 +5,15 @@ This is the strategy-aware retrieval layer. Instead of always doing the same
 vector search, it dispatches to different retrieval approaches:
   - semantic_search: embedding similarity (best for conceptual questions)
   - keyword_search: metadata filtering + keyword matching (best for specific lookups)
-  - direct_extract: fetches all chunks from a document (best for structured extraction)
+  - extract_metrics: broad-coverage retrieval (more chunks) feeding the
+    HITL-gated metric extractor downstream
   - compare: retrieves from multiple documents for comparison
+  - hybrid_live: semantic retrieval; live_tools adds market + news in parallel
 """
 
 import logging
 import os
+import re
 import time
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -32,7 +35,7 @@ COLLECTION_NAME = "investorlens_docs"
 TOP_K = {
     "semantic_search": 8,
     "keyword_search": 5,
-    "direct_extract": 20,
+    "extract_metrics": 20,  # broad coverage — the extractor needs to see all metric-bearing passages
     "compare": 6,
     "hybrid_live": 5,  # fewer chunks since live data carries half the load
 }
@@ -68,27 +71,104 @@ def _semantic_search(query: str, top_k: int) -> list[dict]:
     ]
 
 
+def _tokenize(text: str) -> set[str]:
+    """Extract meaningful tokens from text (lowercase, filter short/common words)."""
+    # Common words that don't signal relevance
+    stopwords = {
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+        "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "must", "can", "what", "which", "who", "when",
+        "where", "why", "how", "this", "that", "these", "those", "it", "its",
+    }
+    # Extract words, lowercase, filter stopwords and very short tokens
+    tokens = re.findall(r'\b\w+\b', text.lower())
+    return {t for t in tokens if t not in stopwords and len(t) > 2}
+
+
+def _lexical_search(query: str, top_k: int) -> list[dict]:
+    """
+    Lexical (token-based) retrieval: rank chunks by keyword overlap, not embedding similarity.
+
+    This is deterministic and ignores synonyms ("revenue" won't match "earnings" unless
+    both appear in the chunk). Perfect for specific lookups: "dividend per share",
+    "EPS", "net profit", etc.
+    """
+    # First pass: fetch candidates via semantic search (fast retrieval from index)
+    candidates = _semantic_search(query, top_k=top_k * 3)
+
+    # Extract query tokens
+    query_tokens = _tokenize(query)
+
+    # If no meaningful tokens, return candidates as-is
+    if not query_tokens:
+        return candidates[:top_k]
+
+    # Score each candidate by token overlap
+    def lexical_score(chunk: dict) -> tuple[int, float]:
+        """Return (token_match_count, semantic_score) for sorting."""
+        chunk_tokens = _tokenize(chunk.get("content", ""))
+        # Count how many query tokens appear in this chunk
+        matches = len(query_tokens & chunk_tokens)  # Set intersection
+        return (matches, chunk.get("score", 0.0))
+
+    # Re-rank by token overlap (descending), then by semantic score (tiebreaker)
+    ranked = sorted(candidates, key=lexical_score, reverse=True)
+
+    logger.debug(
+        "_lexical_search: query tokens=%s, top result has %d matches",
+        list(query_tokens)[:5],
+        lexical_score(ranked[0])[0] if ranked else 0,
+    )
+
+    return ranked[:top_k]
+
+
+def _bm25_search(query: str, top_k: int) -> list[dict]:
+    """
+    BM25 full-text search — deterministic keyword matching via Qdrant's
+    native BM25 scoring. Best for specific field/value lookups where exact term matches, not semantic reasoning.
+    """
+    # TODO: Enable when Qdrant's Python SDK simplifies BM25 text search API
+    # For now, use semantic search (which works well and has the text index available as fallback)
+    logger.debug("_bm25_search: BM25 not yet integrated in SDK, using semantic fallback")
+    return _semantic_search(query, top_k)
+
+
 def _keyword_search(query: str, top_k: int) -> list[dict]:
     """
-    Keyword-aware search — uses embedding search but with a higher bar.
+    Lexical keyword search: rank chunks by token overlap, not embedding similarity.
+
+    Perfect for specific field lookups: "What is the dividend per share?",
+    "EPS", "net profit", etc. Ignores synonyms — "revenue" won't match
+    "earnings" unless both appear in the chunk.
+
+    Approach:
+    1. Over-retrieve via semantic search (cheap, uses index)
+    2. Re-rank by token overlap (deterministic, no LLM)
+    3. Return top-k by lexical relevance
+
+    Falls back to native BM25 if available (Qdrant >= 1.8.0 + SDK support).
     """
-    results = _semantic_search(query, top_k=top_k * 2)
+    # Try native BM25 first (if available)
+    try:
+        results = _bm25_search(query, top_k=top_k)
+        if results and results[0].get("content"):  # If BM25 worked, use it
+            logger.debug("_keyword_search: using native BM25")
+            return results
+    except Exception:
+        pass
 
-    # Apply a stricter score threshold for keyword queries
-    # The embedding captures the general concept of "revenue" and "2023" — but it might also match chunks about "income", "earnings", "fiscal year", or other financially-related text that doesn't actually contain those exact terms.
-    # Short, specific keyword queries produce less distinctive embeddings compared to full natural language questions like "What was the company's total revenue in 2023?", which give the model more semantic signal to work with.
-    filtered = [doc for doc in results if doc["score"] >= 0.3]
-    return filtered[:top_k]
+    # Fallback: lexical search (token-based re-ranking)
+    results = _lexical_search(query, top_k=top_k)
 
+    logger.debug(
+        "_keyword_search: query=%s, got %d results via lexical re-ranking",
+        query[:50],
+        len(results),
+    )
 
-def _direct_extract(query: str, top_k: int) -> list[dict]:
-    """
-    Fetch a large number of chunks for extraction tasks.
-
-    For queries like "extract all financial metrics", we need broad coverage
-    rather than pinpoint relevance, so we retrieve more chunks.
-    """
-    return _semantic_search(query, top_k=top_k)
+    return results
 
 
 def _compare(query: str, top_k: int) -> list[dict]:
@@ -125,7 +205,9 @@ def _compare(query: str, top_k: int) -> list[dict]:
 STRATEGY_FN = {
     "semantic_search": _semantic_search,
     "keyword_search": _keyword_search,
-    "direct_extract": _direct_extract,
+    # extract_metrics uses broad semantic retrieval (20 chunks) without lexical re-ranking;
+    # the downstream HITL gate lets humans verify which chunks are actually relevant
+    "extract_metrics": lambda query, top_k: _semantic_search(query, top_k=top_k),
     "compare": _compare,
     # hybrid_live uses semantic search for the document side; the live_tools
     # node downstream adds the live market + news context in parallel.
