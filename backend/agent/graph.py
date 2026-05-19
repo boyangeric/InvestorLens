@@ -7,7 +7,11 @@ This wires all nodes together with conditional edges:
       │
       │(continue)
       ↓
-  Rewriter → Router → Retriever ─(extract_metrics)─→ Metric Extractor → [INTERRUPT] → END
+  Rewriter ─(clarify)──────────────────────────────────────→ END
+      │
+      │(continue)
+      ↓
+  Router → Retriever ─(extract_metrics)─→ Metric Extractor → [INTERRUPT] → END
                                   │
                                   │(otherwise)
                                   ↓
@@ -85,6 +89,21 @@ def should_continue_after_moderator(state: AgentState) -> str:
     """If moderator blocks, go to END. Otherwise continue to rewriter."""
     if state.get("generation"):  # Moderator set a rejection message
         return "blocked"
+    return "continue"
+
+
+def should_continue_after_rewriter(state: AgentState) -> str:
+    """
+    If the rewriter asked the user for clarification, end the turn so the
+    clarification question reaches the UI. Otherwise continue to the router.
+
+    The rewriter signals "clarification requested" by writing the question
+    to `generation` (same short-circuit pattern as the moderator). Since the
+    moderator's block path bypasses the rewriter entirely, any generation
+    visible at this edge must be the rewriter's clarification request.
+    """
+    if state.get("generation"):
+        return "clarify"
     return "continue"
 
 
@@ -184,8 +203,14 @@ def build_graph() -> CompiledStateGraph:
         {"blocked": END, "continue": "rewriter"},
     )
 
-    # Rewriter → Router
-    graph.add_edge("rewriter", "adaptive_router")
+    # Rewriter → (clarify → END) | (continue → Router)
+    # The rewriter ends the turn early when it needs to ask the user a
+    # clarification question (vague query + no resolvable history).
+    graph.add_conditional_edges(
+        "rewriter",
+        should_continue_after_rewriter,
+        {"clarify": END, "continue": "adaptive_router"},
+    )
 
     # Router → Retriever (always — every strategy needs documents)
     graph.add_edge("adaptive_router", "retriever")

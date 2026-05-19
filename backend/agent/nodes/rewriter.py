@@ -1,9 +1,20 @@
 """
 Query Rewriter Node — resolves ambiguous or follow-up queries using chat history.
 
-Uses GPT-4o-mini to rewrite queries like "what about their revenue?" into
-"What is Qantas's revenue in HY26?" so downstream nodes don't need chat context.
-Only rewrites when necessary — clear, self-contained queries pass through unchanged.
+Uses GPT-4o-mini to do one of three things:
+  1. Pass through clear, self-contained queries unchanged.
+  2. Rewrite vague queries when chat history supplies the missing subject
+     (e.g. "what about their revenue?" → "What is Qantas's revenue?").
+  3. Ask the user a clarification question when the query is genuinely
+     vague AND no usable history is available. The rewriter ends the turn
+     by writing the clarification question to `generation` — the same
+     short-circuit pattern the moderator uses for blocked queries.
+
+Wrong-entity queries ("Tesla's revenue" when only Qantas is uploaded)
+are intentionally treated as clear and passed through. The downstream
+CRAG loop detects the corpus miss and the general_generator answers from
+general knowledge with a disclaimer — that's a better UX than asking the
+user "which document?" when they've already named one we don't have.
 """
 
 import logging
@@ -47,10 +58,11 @@ def rewriter(state: AgentState) -> dict:
 
     rewritten = response.rewritten_query
     was_rewritten = response.was_rewritten
+    needs_clarification = response.needs_clarification
+    clarification_question = response.clarification_question
 
-    trace_entry = {
+    base_trace = {
         "node": "rewriter",
-        "status": "rewritten" if was_rewritten else "unchanged",
         "model": result["model"],
         "duration_ms": result["duration_ms"],
         "tokens_in": result["tokens_in"],
@@ -58,6 +70,23 @@ def rewriter(state: AgentState) -> dict:
         "cost_usd": result["cost_usd"],
     }
 
+    # Outcome 3 — vague + no resolvable history → ask the user and end the turn.
+    # The conditional edge after the rewriter inspects `generation`; if set,
+    # it routes to END (same pattern as the moderator's block path).
+    if needs_clarification and clarification_question:
+        logger.info("Rewriter: clarification requested — %s", clarification_question[:80])
+        trace_entry = {**base_trace, "status": "clarification_requested"}
+        node_trace = state.get("node_trace", []) + [trace_entry]
+        return {
+            "generation": clarification_question,
+            "grounded": False,
+            "original_query": state.get("original_query", query),
+            "current_node": "rewriter",
+            "node_trace": node_trace,
+        }
+
+    # Outcomes 1 & 2 — clear query or successful rewrite.
+    trace_entry = {**base_trace, "status": "rewritten" if was_rewritten else "unchanged"}
     node_trace = state.get("node_trace", []) + [trace_entry]
 
     if was_rewritten:

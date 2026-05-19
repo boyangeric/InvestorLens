@@ -41,6 +41,13 @@ class ModeratorResponse(_Strict):
 class RewriterResponse(_Strict):
     rewritten_query: str
     was_rewritten: bool
+    # Set when the query is genuinely vague AND chat history offers no
+    # resolvable subject. The rewriter ends the turn with `clarification_question`
+    # instead of continuing to the router — same short-circuit pattern as the
+    # moderator's `block` decision. `clarification_question` is empty when
+    # needs_clarification is False (Structured Outputs requires all fields).
+    needs_clarification: bool
+    clarification_question: str
 
 
 # ---------------------------------------------------------------------------
