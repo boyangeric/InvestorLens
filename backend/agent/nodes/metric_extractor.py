@@ -106,6 +106,10 @@ def metric_extractor(state: AgentState) -> dict:
 
     logger.info("Metric extractor: extracted %d metrics from %s", len(metrics), document)
 
+    # Dedup citations per (source, page) so the Sources panel doesn't repeat
+    # the same page once per metric on it.
+    source_strings = sorted({f"{m.source}, Page {m.page}" for m in metrics})
+
     trace_entry = {
         "node": "metric_extractor",
         "status": f"{len(metrics)} metrics extracted",
@@ -116,6 +120,7 @@ def metric_extractor(state: AgentState) -> dict:
         "cost_usd": result["cost_usd"],
         "metrics_extracted": len(metrics),
         "requires_review": True,  # Extracted figures ALWAYS require human verification
+        "sources": source_strings,
     }
 
     node_trace = state.get("node_trace", []) + [trace_entry]

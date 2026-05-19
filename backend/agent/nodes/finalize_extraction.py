@@ -50,12 +50,19 @@ def finalize_extraction(state: AgentState) -> dict:
             document, period, metrics, highlights
         )
 
+    # Re-derive citations from the (possibly edited) metrics so the Sources
+    # panel reflects post-edit state, not the original extraction.
+    source_strings = sorted(
+        {f"{m.get('source', 'unknown')}, Page {m.get('page', 0)}" for m in metrics_dicts}
+    )
+
     trace_entry = {
         "node": "finalize_extraction",
         "status": f"reviewer: {status}",
         "duration_ms": 0,
         "verification_status": status,
         "metric_count": len(metrics_dicts),
+        "sources": source_strings,
     }
     update["node_trace"] = state.get("node_trace", []) + [trace_entry]
 

@@ -16,9 +16,18 @@ type DocSource = { kind: "doc"; source: string; page: string };
 type LiveSource = { kind: "live"; source: string; meta: string };
 type CitationSource = DocSource | LiveSource;
 
-export function Sources({ messages }: { messages: ChatMessage[] }) {
+export function Sources({
+  messages,
+  liveTrace,
+}: {
+  messages: ChatMessage[];
+  liveTrace?: TraceEntry[];
+}) {
   const lastAnswer = [...messages].reverse().find((m) => m.role === "assistant");
-  const sources = extractSources(lastAnswer?.trace);
+  // During HITL pause and mid-generation, there's no completed assistant
+  // message yet — fall back to the live trace so citations appear as soon
+  // as a node emits them (e.g. metric_extractor when the approval modal opens).
+  const sources = extractSources(lastAnswer?.trace ?? liveTrace);
 
   return (
     <div className="flex h-full flex-col">

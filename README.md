@@ -4,6 +4,10 @@ An agentic financial document analyst powered by LangGraph, OpenAI, and Qdrant.
 
 Upload financial documents (annual reports, earnings transcripts, ETF factsheets) and interact with them through an intelligent agent that adaptively chooses the best retrieval strategy for each query — and reaches out to live market and news data when the question needs current state the report can't answer.
 
+[Agent workflow](docs/agent-workflow.png)
+
+The LangGraph StateGraph above shows every node the agent can fire, the conditional edges between them (including the CRAG retry loop and the hybrid-live fan-out), and the human-in-the-loop interrupt on the metric extractor. See [docs/architecture.md](docs/architecture.md) for the full system design.
+
 ## Features
 
 - **Adaptive RAG**: Agent selects semantic search, keyword search, structured extraction, multi-document comparison, or hybrid-live per query

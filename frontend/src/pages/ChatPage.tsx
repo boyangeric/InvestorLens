@@ -49,7 +49,7 @@ export function ChatPage({
 
       {/* Sources column */}
       <section className="hidden w-[260px] shrink-0 overflow-y-auto bg-white lg:block">
-        <Sources messages={messages} />
+        <Sources messages={messages} liveTrace={liveTrace} />
       </section>
     </div>
   );
